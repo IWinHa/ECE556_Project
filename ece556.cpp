@@ -2,7 +2,163 @@
 
 #include "ece556.h"
 #include "printStuff.h"
+#include <limits.h>
 #include <string.h>
+
+static int absInt(int value) {
+    return (value < 0) ? -value : value;
+}
+
+static int isPointInGrid(routingInst *rst, point p) {
+    if (rst == NULL) {
+        return 0;
+    }
+
+    return (p.x >= 0 && p.x < rst->gx && p.y >= 0 && p.y < rst->gy);
+}
+
+static int computeStraightPathCost(routingInst *rst, point p1, point p2) {
+    if (rst == NULL) {
+        return INT_MAX;
+    }
+
+    // If the points are not aligned either horizontally or vertically, we cannot connect them with a straight segment, so return infinite cost.
+    if (p1.x != p2.x && p1.y != p2.y) {
+        return INT_MAX;
+    }
+
+    int x = p1.x;
+    int y = p1.y;
+    int dx = (p2.x > p1.x) ? 1 : ((p2.x < p1.x) ? -1 : 0);
+    int dy = (p2.y > p1.y) ? 1 : ((p2.y < p1.y) ? -1 : 0);
+    int cost = 0;
+
+    // Iterate through each edge along the path and calculate the cost based on the projected utilization after adding this segment.
+    while (x != p2.x || y != p2.y) {
+        int nextX = x + dx;
+        int nextY = y + dy;
+        int edgeId = calculateEdgeNumber(rst, x, nextX, y, nextY);
+        if (edgeId < 0 || edgeId >= rst->numEdges) {
+            return INT_MAX;
+        }
+
+        int projectedUtil = rst->edgeUtils[edgeId] + 1;
+        if (projectedUtil > rst->edgeCaps[edgeId]) {
+            cost += projectedUtil - rst->edgeCaps[edgeId];
+        }
+
+        x = nextX;
+        y = nextY;
+    }
+
+    return cost;
+}
+
+static int addStraightSegment(routingInst *rst, segment *seg, point p1, point p2) {
+    if (rst == NULL || seg == NULL) {
+        return 0;
+    }
+
+    // If the points are not aligned either horizontally or vertically, we cannot connect them with a straight segment, so return failure.
+    if (p1.x != p2.x && p1.y != p2.y) {
+        return 0;
+    }
+
+    seg->p1 = p1;
+    seg->p2 = p2;
+    seg->numEdges = absInt(p2.x - p1.x) + absInt(p2.y - p1.y);
+    seg->edges = NULL;
+
+    if (seg->numEdges == 0) {
+        return 1;
+    }
+
+    seg->edges = (int *) malloc(seg->numEdges * sizeof(int));
+    if (seg->edges == NULL) {
+        return 0;
+    }
+
+    int x = p1.x;
+    int y = p1.y;
+    int dx = (p2.x > p1.x) ? 1 : ((p2.x < p1.x) ? -1 : 0);
+    int dy = (p2.y > p1.y) ? 1 : ((p2.y < p1.y) ? -1 : 0);
+
+    // Iterate through each edge along the path and add it to the segment's edge list, while also updating the edge utilization in the routing instance.
+    for (int i = 0; i < seg->numEdges; i++) {
+        int nextX = x + dx;
+        int nextY = y + dy;
+        int edgeId = calculateEdgeNumber(rst, x, nextX, y, nextY);
+        if (edgeId < 0 || edgeId >= rst->numEdges) {
+            free(seg->edges);
+            seg->edges = NULL;
+            seg->numEdges = 0;
+            return 0;
+        }
+
+        seg->edges[i] = edgeId;
+        rst->edgeUtils[edgeId]++;
+
+        x = nextX;
+        y = nextY;
+    }
+
+    return 1;
+}
+
+static int appendStraightSegment(routingInst *rst, route *nroute, point p1, point p2) {
+    if (nroute == NULL) {
+        return 0;
+    }
+
+    if (p1.x == p2.x && p1.y == p2.y) {
+        return 1;
+    }
+
+    if (!addStraightSegment(rst, &(nroute->segments[nroute->numSegs]), p1, p2)) {
+        return 0;
+    }
+
+    nroute->numSegs++;
+    return 1;
+}
+
+static point chooseCorner(routingInst *rst, point start, point end) {
+    point horizontalFirst;
+    horizontalFirst.x = end.x;
+    horizontalFirst.y = start.y;
+
+    point verticalFirst;
+    verticalFirst.x = start.x;
+    verticalFirst.y = end.y;
+
+    // Compute the cost of the two possible L-shaped routes (horizontal first vs vertical first) and choose the one with lower cost. If one of them is not feasible (i.e. has infinite cost), choose the other one. If both are not feasible, it doesn't matter which one we return since both will fail when we try to add the straight segments later.
+    int horizontalFirstCost = computeStraightPathCost(rst, start, horizontalFirst);
+    if (horizontalFirstCost != INT_MAX) {
+        int secondLegCost = computeStraightPathCost(rst, horizontalFirst, end);
+        if (secondLegCost == INT_MAX) {
+            horizontalFirstCost = INT_MAX;
+        } else {
+            horizontalFirstCost += secondLegCost;
+        }
+    }
+
+    // Similarly compute the cost for vertical first
+    int verticalFirstCost = computeStraightPathCost(rst, start, verticalFirst);
+    if (verticalFirstCost != INT_MAX) {
+        int secondLegCost = computeStraightPathCost(rst, verticalFirst, end);
+        if (secondLegCost == INT_MAX) {
+            verticalFirstCost = INT_MAX;
+        } else {
+            verticalFirstCost += secondLegCost;
+        }
+    }
+
+    if (verticalFirstCost < horizontalFirstCost) {
+        return verticalFirst;
+    }
+
+    return horizontalFirst;
+}
 
 int readBenchmark(const char *fileName, routingInst *rst) {
     /*********** TO BE FILLED BY YOU **********/
@@ -142,45 +298,81 @@ int readBenchmark(const char *fileName, routingInst *rst) {
 
 int solveRouting(routingInst *rst) {
     /*********** TO BE FILLED BY YOU **********/
+    if (rst == NULL || rst->nets == NULL || rst->edgeCaps == NULL || rst->edgeUtils == NULL) {
+        return 0;
+    }
 
+    // Initialize edgeUtils to 0 since we haven't routed anything yet
+    for (int i = 0; i < rst->numEdges; i++) {
+        rst->edgeUtils[i] = 0;
+    }
 
-    // TODO: ACTUALLY IMPLEMENT THIS
-    // THIS IS JUST THERE TO TEST writeOutput()
+    // For each net, we will route in the order of the pins given.
+    for (int i = 0; i < rst->numNets; i++) {
 
-    rst->nets[0].nroute.numSegs = 2;
-    rst->nets[0].nroute.segments = (segment*) malloc(rst->nets[0].nroute.numSegs * sizeof(segment));
-    rst->nets[0].nroute.segments[0].numEdges = 3;
-    rst->nets[0].nroute.segments[0].edges = (int*) malloc(rst->nets[0].nroute.segments[0].numEdges * sizeof(int));
-    rst->nets[0].nroute.segments[0].edges[0] = 2;
-    rst->nets[0].nroute.segments[0].edges[1] = 3;
-    rst->nets[0].nroute.segments[0].edges[2] = 4;
+        net *currNet = &(rst->nets[i]);
+        if (currNet->numPins < 1 || currNet->pins == NULL) {
+            return 0;
+        }
 
-    rst->nets[0].nroute.segments[0].p1.x = 5;
-    rst->nets[0].nroute.segments[0].p1.y = 2;
-    rst->nets[0].nroute.segments[0].p2.x = 3;
-    rst->nets[0].nroute.segments[0].p2.y = 8;
+        currNet->nroute.numSegs = 0;
+        currNet->nroute.segments = NULL;
 
+        // The maximum number of segments we would need is 2 * (numPins - 1) since each pair of pins can require at most 2 segments (i.e. an L-shaped route).
+        int maxNumSegs = 2 * (currNet->numPins - 1);
+        if (maxNumSegs == 0) {
+            continue;
+        }
 
-    rst->nets[0].nroute.segments[1].numEdges = 2;
-    rst->nets[0].nroute.segments[1].edges = (int*) malloc(rst->nets[0].nroute.segments[0].numEdges * sizeof(int));
-    rst->nets[0].nroute.segments[1].edges[0] = 10;
-    rst->nets[0].nroute.segments[1].edges[1] = 20;
+        currNet->nroute.segments = (segment *) malloc(maxNumSegs * sizeof(segment));
+        if (currNet->nroute.segments == NULL) {
+            return 0;
+        }
 
-    rst->nets[0].nroute.segments[1].p1.x = 1;
-    rst->nets[0].nroute.segments[1].p1.y = 68;
-    rst->nets[0].nroute.segments[1].p2.x = 226;
-    rst->nets[0].nroute.segments[1].p2.y = 65;
+        // Initialize all segments to have 0 edges and NULL edge arrays since we haven't added any segments yet
+        for (int segIndex = 0; segIndex < maxNumSegs; segIndex++) {
+            currNet->nroute.segments[segIndex].numEdges = 0;
+            currNet->nroute.segments[segIndex].edges = NULL;
+        }
 
-    rst->nets[1].nroute.numSegs = 1;
-    rst->nets[1].nroute.segments = (segment*) malloc(rst->nets[1].nroute.numSegs * sizeof(segment));
-    rst->nets[1].nroute.segments[0].numEdges = 1;
-    rst->nets[1].nroute.segments[0].edges = (int*) malloc(rst->nets[1].nroute.segments[0].numEdges * sizeof(int));
-    rst->nets[1].nroute.segments[0].edges[0] = 2222;
+        // Route in the order of the pins given. So if we have pins A, B, C, we will route A to B first and then B to C.
+        for (int pinIndex = 1; pinIndex < currNet->numPins; pinIndex++) {
+            point start = currNet->pins[pinIndex - 1];
+            point end = currNet->pins[pinIndex];
 
-    rst->nets[1].nroute.segments[0].p1.x = 51;
-    rst->nets[1].nroute.segments[0].p1.y = 52;
-    rst->nets[1].nroute.segments[0].p2.x = 53;
-    rst->nets[1].nroute.segments[0].p2.y = 54;
+            if (!isPointInGrid(rst, start) || !isPointInGrid(rst, end)) {
+                return 0;
+            }
+
+            if (start.x == end.x || start.y == end.y) {
+                if (!appendStraightSegment(rst, &(currNet->nroute), start, end)) {
+                    return 0;
+                }
+                continue;
+            }
+
+            point corner = chooseCorner(rst, start, end);
+            if (!appendStraightSegment(rst, &(currNet->nroute), start, corner)) {
+                return 0;
+            }
+            if (!appendStraightSegment(rst, &(currNet->nroute), corner, end)) {
+                return 0;
+            }
+        }
+
+        if (currNet->nroute.numSegs == 0) {
+            free(currNet->nroute.segments);
+            currNet->nroute.segments = NULL;
+        } else {
+            segment *shrunkSegments = (segment *) realloc(
+                currNet->nroute.segments,
+                currNet->nroute.numSegs * sizeof(segment)
+            );
+            if (shrunkSegments != NULL) {
+                currNet->nroute.segments = shrunkSegments;
+            }
+        }
+    }
 
     return 1;
 }
