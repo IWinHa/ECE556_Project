@@ -1,7 +1,7 @@
 make
 
 # Run with valgrind
-valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes ./ROUTE.exe in.txt potentialOut.txt
+valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes ./ROUTE.exe in1.txt potentialOut.txt
 
 # Run without valgrind
 # ./ROUTE.exe in.txt potentialOut.txt 
