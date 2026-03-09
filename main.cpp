@@ -46,6 +46,7 @@ int main(int argc, char **argv)
 
     
  	release(rst);
+ 	delete rst;
  	printf("\nDONE!\n");	
  	return 0;
 }
