@@ -187,38 +187,38 @@ int readBenchmark(const char *fileName, routingInst *rst) {
     // grid <gx> <gy>
     fgets(readFileBuffer, BUFFER_LENGTH, toRead);
 
-    char* spaceDelimiter = strtok(readFileBuffer, " ");
+    char* spaceDelimiter = strtok(readFileBuffer, " \t\n");
 
     // spaceDelimiter should just be "grid" at this point
     if (strcmp(spaceDelimiter, "grid")) printf("spaceDelimiter was \"%s\"\n", spaceDelimiter);
 
     // Extract <gx> and <gy>
-    rst->gx = strtol(strtok(NULL, " "), NULL, 10);
-    rst->gy = strtol(strtok(NULL, " "), NULL, 10);
+    rst->gx = strtol(strtok(NULL, " \t\n"), NULL, 10);
+    rst->gy = strtol(strtok(NULL, " \t\n"), NULL, 10);
 
     // capacity <cap>
     fgets(readFileBuffer, BUFFER_LENGTH, toRead);
 
-    spaceDelimiter = strtok(readFileBuffer, " ");
+    spaceDelimiter = strtok(readFileBuffer, " \t\n");
 
     // spaceDelimiter should just be "capacity" at this point
     if (strcmp(spaceDelimiter, "capacity")) printf("spaceDelimiter was \"%s\"\n", spaceDelimiter);
 
-    rst->cap = strtol(strtok(NULL, " "), NULL, 10);
+    rst->cap = strtol(strtok(NULL, " \t\n"), NULL, 10);
     
     // num net <numNets>
     fgets(readFileBuffer, BUFFER_LENGTH, toRead);
 
-    spaceDelimiter = strtok(readFileBuffer, " ");
+    spaceDelimiter = strtok(readFileBuffer, " \t\n");
 
     // spaceDelimiter should first be "num" at this point
     if (strcmp(spaceDelimiter, "num")) printf("spaceDelimiter was \"%s\"\n", spaceDelimiter);
 
     // spaceDelimiter should now be "net"
-    spaceDelimiter = strtok(NULL, " ");
+    spaceDelimiter = strtok(NULL, " \t\n");
     if (strcmp(spaceDelimiter, "net")) printf("spaceDelimiter was \"%s\"\n", spaceDelimiter);
 
-    rst->numNets = strtol(strtok(NULL, " "), NULL, 10);
+    rst->numNets = strtol(strtok(NULL, " \t\n"), NULL, 10);
 
     rst->nets = (net*) malloc(rst->numNets * sizeof(net));
 
@@ -230,22 +230,22 @@ int readBenchmark(const char *fileName, routingInst *rst) {
         fgets(readFileBuffer, BUFFER_LENGTH, toRead);
 
         // Get the first part (n#)
-        spaceDelimiter = strtok(readFileBuffer, " ");
+        spaceDelimiter = strtok(readFileBuffer, " \t\n");
 
         // The first character will be "n" so we should ignore
         // Hence we start reading from index 1
         rst->nets[i].id = strtol(spaceDelimiter + 1, NULL, 10);
 
-        rst->nets[i].numPins = strtol(strtok(NULL, " "), NULL, 10);
+        rst->nets[i].numPins = strtol(strtok(NULL, " \t\n"), NULL, 10);
 
         rst->nets[i].pins = (point*) malloc(rst->nets[i].numPins * sizeof(point));
 
         for (int j = 0; j < rst->nets[i].numPins; j++) {
             // This would be each point: 0 2, 1 1, etc.
             fgets(readFileBuffer, BUFFER_LENGTH, toRead);
-            spaceDelimiter = strtok(readFileBuffer, " ");
+            spaceDelimiter = strtok(readFileBuffer, " \t\n");
             rst->nets[i].pins[j].x = strtol(spaceDelimiter, NULL, 10);
-            rst->nets[i].pins[j].y = strtol(strtok(NULL, " "), NULL, 10);
+            rst->nets[i].pins[j].y = strtol(strtok(NULL, " \t\n"), NULL, 10);
         }
 
         rst->nets[i].nroute.numSegs = 0;
@@ -261,9 +261,9 @@ int readBenchmark(const char *fileName, routingInst *rst) {
     rst->edgeCaps = (int*) malloc(rst->numEdges * sizeof(int));
     rst->edgeUtils = (int*) malloc(rst->numEdges * sizeof(int));
 
-    // Initialize all edges to 1 and all utilized edges to 0 since we don't use any
+    // Initialize all edges to the default capacity and all utilized edges to 0 since we don't use any
     for (int i = 0; i < rst->numEdges; i++) {
-        rst->edgeCaps[i] = 1;
+        rst->edgeCaps[i] = rst->cap;
         rst->edgeUtils[i] = 0;
     }
 
@@ -281,11 +281,11 @@ int readBenchmark(const char *fileName, routingInst *rst) {
     for (int i = 0; i < numBlockages; i++) {
         fgets(readFileBuffer, BUFFER_LENGTH, toRead);
 
-        int x_1 = strtol(strtok(readFileBuffer, " "), NULL, 10);
-        int y_1 = strtol(strtok(NULL, " "), NULL, 10);
-        int x_2 = strtol(strtok(NULL, " "), NULL, 10);
-        int y_2 = strtol(strtok(NULL, " "), NULL, 10);
-        int newSize = strtol(strtok(NULL, " "), NULL, 10);
+        int x_1 = strtol(strtok(readFileBuffer, " \t\n"), NULL, 10);
+        int y_1 = strtol(strtok(NULL, " \t\n"), NULL, 10);
+        int x_2 = strtol(strtok(NULL, " \t\n"), NULL, 10);
+        int y_2 = strtol(strtok(NULL, " \t\n"), NULL, 10);
+        int newSize = strtol(strtok(NULL, " \t\n"), NULL, 10);
 
         rst->edgeCaps[calculateEdgeNumber(rst, x_1, x_2, y_1, y_2)] = newSize;
     }
