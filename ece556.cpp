@@ -388,10 +388,10 @@ int writeOutput(const char *outRouteFile, routingInst *rst) {
     for (int i = 0; i < rst->numNets; i++) {
         fprintf(toWrite, "n%d\n", rst->nets[i].id);
         for (int j = 0; j < rst->nets[i].nroute.numSegs; j++) {
-            fprintf(toWrite, "(%d, %d) - (%d, %d)\n", rst->nets[i].nroute.segments[j].p1.x,
-                                                    rst->nets[i].nroute.segments[j].p1.y,
-                                                    rst->nets[i].nroute.segments[j].p2.x,
-                                                    rst->nets[i].nroute.segments[j].p2.y);
+            fprintf(toWrite, "(%d,%d)-(%d,%d)\n", rst->nets[i].nroute.segments[j].p1.x,
+                                                   rst->nets[i].nroute.segments[j].p1.y,
+                                                   rst->nets[i].nroute.segments[j].p2.x,
+                                                   rst->nets[i].nroute.segments[j].p2.y);
         }
         fprintf(toWrite, "!\n");
     }
