@@ -269,7 +269,7 @@ int readBenchmark(const char *fileName, routingInst *rst) {
         rst->edgeCaps[i] = rst->cap;
         rst->edgeUtils[i] = 0;
         rst->edgeWeights[i] = 0;
-        rst->edgeHistory[i] = 0;
+        rst->edgeHistory[i] = 1;
     }
 
     //////////////////////////////////////////////
