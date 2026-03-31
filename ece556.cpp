@@ -304,6 +304,9 @@ int readBenchmark(const char *fileName, routingInst *rst) {
 }
 
 int solveRouting(routingInst *rst) {
+    time_t begin;
+    time(&begin);
+
     /*********** TO BE FILLED BY YOU **********/
     if (rst == NULL || rst->nets == NULL || rst->edgeCaps == NULL || rst->edgeUtils == NULL) {
         return 0;
@@ -389,12 +392,17 @@ int solveRouting(routingInst *rst) {
     }
 
     // TODO: RRR, etc.
-    printf("UPDATING EDGE WEIGHTS...\n");
     for (int i = 0; i < rst->numEdges; i++) {
         updateEdgeWeights(rst, i);
     }
 
-    while (false) {}
+    int SECONDS_TO_WAIT = 20; /* 5 * 60; */ // Minimum amount of time was 5 minutes
+    while (!checkTime(&begin, SECONDS_TO_WAIT)) {
+        // Do this
+        printf("WAITING...\n");
+        // https://stackoverflow.com/questions/7684359/how-to-use-nanosleep-in-c-what-are-tim-tv-sec-and-tim-tv-nsec
+        nanosleep((const struct timespec[]){{5, 0}}, NULL);
+    }
 
     return 1;
 }
@@ -544,7 +552,7 @@ void reorderPins(routingInst* rst) {
         for (int i = 0; i < rst->nets[numNet].numPins - 2; i++) {
 
             // swapIndex now has the best pin to follow the current pin with
-            int swapIndex = closestPoint(rst, numNet, i, i + 1, rst->nets->numPins);
+            int swapIndex = closestPoint(rst, numNet, i, i + 1, rst->nets[numNet].numPins);
 
             // Swap both points
             point temp = rst->nets[numNet].pins[i + 1];
@@ -568,5 +576,13 @@ void updateEdgeWeights(routingInst* rst, int index) {
     else rst->edgeHistory[index]++;
 
     rst->edgeWeights[index] = rst->edgeHistory[index] * overflow_e;
+}
+
+int checkTime(time_t* begin, int NUM_SECONDS) {
+    // https://levelup.gitconnected.com/8-ways-to-measure-execution-time-in-c-c-48634458d0f9
+    // #4 - using time()
+    time_t end;
+    time(&end);
+    return (end - *begin > NUM_SECONDS) ? TRUE : FALSE; 
 }
 // ***************************************************************

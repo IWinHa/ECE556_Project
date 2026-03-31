@@ -15,9 +15,6 @@ int main(int argc, char **argv)
 	char *inputFileName = argv[1];
  	char *outputFileName = argv[2];
 
-    time_t begin;
-    time(&begin);
-
  	/// create a new routing instance
  	routingInst *rst = new routingInst;
 	

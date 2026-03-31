@@ -122,6 +122,7 @@ int calculateEdgeNumber(routingInst* rst, int x_1, int x_2, int y_1, int y_2);
 /******************** ADDED PART 2 METHODS!!! ********************/
 void reorderPins(routingInst* rst);
 void updateEdgeWeights(routingInst* rst, int index);
+int checkTime(time_t* begin, int NUM_SECONDS);
 
 // ***************************************************************
 
