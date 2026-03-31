@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 /**
  * A structure to represent a 2D Point.
@@ -64,6 +65,10 @@ typedef struct {
     int *edgeCaps;  /* array of the actual edge capacities after considering for blockages */
     int *edgeUtils; /* array of edge utilizations */
 
+    // ADDED IN PART 2
+    int* edgeHistory; /* h_e used in the slide deck for formulas */
+    int* edgeWeights; /* Used to calculate edge weights for part 2 */
+
 } routingInst;
 
 /* int readBenchmark(const char *fileName, routingInst *rst)
@@ -110,6 +115,14 @@ int release(routingInst *rst);
 // If any extra stuff (testing, etc) needs to run in a function, put it here
 void extraFunc();
 
+// Calculates the edge number according to the slide recommendation from Part 1.
 int calculateEdgeNumber(routingInst* rst, int x_1, int x_2, int y_1, int y_2);
+
+
+/******************** ADDED PART 2 METHODS!!! ********************/
+void reorderPins(routingInst* rst);
+void updateEdgeWeights(routingInst* rst, int index);
+
+// ***************************************************************
 
 #endif // ECE556_H

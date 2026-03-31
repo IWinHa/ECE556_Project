@@ -258,14 +258,21 @@ int readBenchmark(const char *fileName, routingInst *rst) {
 
     rst->numEdges = rst->gy * (rst->gx - 1) + rst->gx * (rst->gy - 1);
 
+    ////////// MODIFIED IN PART 2 /////////////////
     rst->edgeCaps = (int*) malloc(rst->numEdges * sizeof(int));
     rst->edgeUtils = (int*) malloc(rst->numEdges * sizeof(int));
+    rst->edgeWeights = (int*) malloc(rst->numEdges * sizeof(int));
+    rst->edgeHistory = (int*) malloc(rst->numEdges * sizeof(int));
 
     // Initialize all edges to the default capacity and all utilized edges to 0 since we don't use any
     for (int i = 0; i < rst->numEdges; i++) {
         rst->edgeCaps[i] = rst->cap;
         rst->edgeUtils[i] = 0;
+        rst->edgeWeights[i] = 0;
+        rst->edgeHistory[i] = 0;
     }
+
+    //////////////////////////////////////////////
 
     // 2
     // 1 0 1 1 0
@@ -306,6 +313,13 @@ int solveRouting(routingInst *rst) {
     for (int i = 0; i < rst->numEdges; i++) {
         rst->edgeUtils[i] = 0;
     }
+
+
+    ////////// ADDED IN PART 2 /////////////////
+    // printRoutingInst(rst, TRUE);
+    reorderPins(rst);
+    // printRoutingInst(rst, TRUE);
+    ////////////////////////////////////////////
 
     // For each net, we will route in the order of the pins given.
     for (int i = 0; i < rst->numNets; i++) {
@@ -374,6 +388,14 @@ int solveRouting(routingInst *rst) {
         }
     }
 
+    // TODO: RRR, etc.
+    printf("UPDATING EDGE WEIGHTS...\n");
+    for (int i = 0; i < rst->numEdges; i++) {
+        updateEdgeWeights(rst, i);
+    }
+
+    while (false) {}
+
     return 1;
 }
 
@@ -424,6 +446,10 @@ int release(routingInst *rst) {
     // Free "edge utils"
     free(rst->edgeUtils);
 
+    // ADDED IN PART 2 - free edgeWeights and edgeHistory
+    free(rst->edgeWeights);
+    free(rst->edgeHistory);
+
 
     return 1;
 }
@@ -464,3 +490,83 @@ void extraFunc() {
     p->y = 23;
     printPoint(p, TRUE); */
 }
+
+
+/******************** ADDED PART 2 METHODS!!! ********************/
+
+/**
+ * Calculates distance between two points.
+ * NOTE: manhattanDistance and rectilinear distance are the same thing.
+ * Manhattan distance = |x_2 - x_1| + |y_2 - y_1|
+ */
+int manhattanDistance(point p1, point p2) {
+    return absInt(p1.x - p2.x) + absInt(p1.y - p2.y);
+}
+
+/**
+ * Finds the closest point to a given point.
+ * Compares [startPoint, endPoint) to comparePoint
+ * @param rst routingInstance pointer
+ * @param netNum which net to use
+ * @param comparePoint compare all other points to this one
+ * @param startPoint index to start (inclusive)
+ * @param endPoint index to end (EXclusive)
+ */
+int closestPoint(routingInst* rst, int netNum, int comparePoint, int startPoint, int endPoint) {
+    int closestIndex = -1;
+    int closestDistance = -1;
+    for (int i = startPoint; i < endPoint; i++) {
+        if (i == comparePoint) continue;
+        int potentialDistance = manhattanDistance(rst->nets[netNum].pins[comparePoint], 
+                                                rst->nets[netNum].pins[i]);
+        if (closestDistance == -1 || potentialDistance < closestDistance) {
+            closestIndex = i;
+            closestDistance = potentialDistance;
+        }
+    }
+    return closestIndex;
+}
+
+/**
+ * Reorders each pin according to which next pin is the closest Manhattan distance away.
+ * TODO: Rectilinear uses MBB to compare.
+ *       However the only way I can think of doing that is to check all points on the MBB with all pin numbers.
+ *       This would explode very quickly and I think in terms of time it may be better to do this.
+ *       Otherwise we can code in MBB as well.
+ */
+void reorderPins(routingInst* rst) {
+
+    // Each net is done separately
+    for (int numNet = 0; numNet < rst->numNets; numNet++) {
+
+        // The very last element doesn't need to be swapped (would be swapped with itself)
+        // Thus we can save an iteration and only go up to numPins - 2
+        for (int i = 0; i < rst->nets[numNet].numPins - 2; i++) {
+
+            // swapIndex now has the best pin to follow the current pin with
+            int swapIndex = closestPoint(rst, numNet, i, i + 1, rst->nets->numPins);
+
+            // Swap both points
+            point temp = rst->nets[numNet].pins[i + 1];
+            rst->nets[numNet].pins[i + 1] = rst->nets[numNet].pins[swapIndex];
+            rst->nets[numNet].pins[swapIndex] = temp;
+        }
+    }
+}
+
+/**
+ * Updates a particular edge weight based on the formula used in the slides.
+ * @param index 0-indexed edge to update weights for
+ */
+void updateEdgeWeights(routingInst* rst, int index) {
+    int overflow_e = rst->edgeUtils[index] - rst->edgeCaps[index];
+
+    // C does not have a max() function, so this changes it to 0 if 0 > u_e - c_e
+    // Only if overflow_e is nonzero do we increment edgeHistory
+    // Thus we can perform the check and implement edgesHistory at the same time
+    if (overflow_e <= 0) overflow_e = 0;
+    else rst->edgeHistory[index]++;
+
+    rst->edgeWeights[index] = rst->edgeHistory[index] * overflow_e;
+}
+// ***************************************************************
