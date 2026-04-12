@@ -2,18 +2,52 @@
 
 #include "ece556.h"
 #include "printStuff.h"
+#include <string.h>
+
+static int parseBinaryFlag(const char *arg, const char *prefix, int *valueOut)
+{
+	if (arg == NULL || prefix == NULL || valueOut == NULL) {
+		return 0;
+	}
+
+	size_t prefixLength = strlen(prefix);
+	if (strncmp(arg, prefix, prefixLength) != 0) {
+		return 0;
+	}
+
+	if (arg[prefixLength] == '0' && arg[prefixLength + 1] == '\0') {
+		*valueOut = 0;
+		return 1;
+	}
+
+	if (arg[prefixLength] == '1' && arg[prefixLength + 1] == '\0') {
+		*valueOut = 1;
+		return 1;
+	}
+
+	return 0;
+}
 
 int main(int argc, char **argv)
 {
 
- 	if (argc != 3) {
- 		printf("Usage : ./ROUTE.exe <input_benchmark_name> <output_file_name> \n");
+ 	if (argc != 5) {
+ 		printf("Usage : ./ROUTE.exe -d=<0|1> -n=<0|1> <input_benchmark_name> <output_file_name> \n");
  		return 1;
  	}
 
  	int status;
-	char *inputFileName = argv[1];
- 	char *outputFileName = argv[2];
+	int usePinOrdering = 0;
+	int useNetOrderingAndRrr = 0;
+	if (!parseBinaryFlag(argv[1], "-d=", &usePinOrdering) ||
+		!parseBinaryFlag(argv[2], "-n=", &useNetOrderingAndRrr)) {
+		printf("Usage : ./ROUTE.exe -d=<0|1> -n=<0|1> <input_benchmark_name> <output_file_name> \n");
+		return 1;
+	}
+
+	char *inputFileName = argv[3];
+ 	char *outputFileName = argv[4];
+	setRoutingMode(usePinOrdering, useNetOrderingAndRrr);
 
  	/// create a new routing instance
  	routingInst *rst = new routingInst;

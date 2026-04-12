@@ -3,10 +3,52 @@
 #include "ece556.h"
 #include "printStuff.h"
 #include <limits.h>
+#include <queue>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <vector>
+
+void reorderPins(routingInst* rst);
+void updateEdgeWeights(routingInst* rst, int index);
+int checkTime(time_t* begin, int NUM_SECONDS);
+
+static int gUsePinOrdering = 0;
+static int gUseNetOrderingAndRrr = 0;
+static int gRrrIteration = 0;
+static int gUseMinCostRouting = 0;
+
+static void clearAllRoutes(routingInst *rst);
+static int routeSingleNet(routingInst *rst, net *currNet);
+static void recomputeEdgeWeight(routingInst *rst, int index, int updateHistory);
+static void updateAllEdgeWeights(routingInst *rst, int updateHistory);
+static void updateRouteEdgeWeights(routingInst *rst, route *nroute, int updateHistory);
+
+void setRoutingMode(int usePinOrdering, int useNetOrderingAndRrr) {
+    gUsePinOrdering = usePinOrdering ? 1 : 0;
+    gUseNetOrderingAndRrr = useNetOrderingAndRrr ? 1 : 0;
+}
 
 static int absInt(int value) {
     return (value < 0) ? -value : value;
+}
+
+static int computeOverflowAmount(int utilization, int capacity) {
+    int overflow = utilization - capacity;
+    return (overflow > 0) ? overflow : 0;
+}
+
+static void recomputeEdgeWeight(routingInst *rst, int index, int updateHistory) {
+    if (rst == NULL || index < 0 || index >= rst->numEdges) {
+        return;
+    }
+
+    int overflow = computeOverflowAmount(rst->edgeUtils[index], rst->edgeCaps[index]);
+    if (updateHistory && overflow > 0) {
+        rst->edgeHistory[index] += overflow;
+    }
+
+    rst->edgeWeights[index] = (overflow > 0) ? rst->edgeHistory[index] * overflow : 0;
 }
 
 static int isPointInGrid(routingInst *rst, point p) {
@@ -17,12 +59,42 @@ static int isPointInGrid(routingInst *rst, point p) {
     return (p.x >= 0 && p.x < rst->gx && p.y >= 0 && p.y < rst->gy);
 }
 
+static int pointToIndex(routingInst *rst, point p) {
+    return p.y * rst->gx + p.x;
+}
+
+static point indexToPoint(routingInst *rst, int pointIndex) {
+    point p;
+    p.x = pointIndex % rst->gx;
+    p.y = pointIndex / rst->gx;
+    return p;
+}
+
+static int computeTraversalCost(routingInst *rst, point p1, point p2) {
+    if (rst == NULL) {
+        return INT_MAX;
+    }
+
+    int edgeId = calculateEdgeNumber(rst, p1.x, p2.x, p1.y, p2.y);
+    if (edgeId < 0 || edgeId >= rst->numEdges) {
+        return INT_MAX;
+    }
+
+    int projectedUtil = rst->edgeUtils[edgeId] + 1;
+    int projectedOverflow = computeOverflowAmount(projectedUtil, rst->edgeCaps[edgeId]);
+    int overflowPenalty = projectedOverflow * projectedOverflow;
+
+    // Keep a unit wirelength term so zero-weight edges still prefer shorter paths.
+    // Add both the historical edge weight and an immediate penalty for projected
+    // overflow so rip-up/reroute can move off congested regions sooner.
+    return 1 + rst->edgeWeights[edgeId] + overflowPenalty;
+}
+
 static int computeStraightPathCost(routingInst *rst, point p1, point p2) {
     if (rst == NULL) {
         return INT_MAX;
     }
 
-    // If the points are not aligned either horizontally or vertically, we cannot connect them with a straight segment, so return infinite cost.
     if (p1.x != p2.x && p1.y != p2.y) {
         return INT_MAX;
     }
@@ -33,25 +105,62 @@ static int computeStraightPathCost(routingInst *rst, point p1, point p2) {
     int dy = (p2.y > p1.y) ? 1 : ((p2.y < p1.y) ? -1 : 0);
     int cost = 0;
 
-    // Iterate through each edge along the path and calculate the cost based on the projected utilization after adding this segment.
     while (x != p2.x || y != p2.y) {
-        int nextX = x + dx;
-        int nextY = y + dy;
-        int edgeId = calculateEdgeNumber(rst, x, nextX, y, nextY);
-        if (edgeId < 0 || edgeId >= rst->numEdges) {
+        point currPoint;
+        currPoint.x = x;
+        currPoint.y = y;
+
+        point nextPoint;
+        nextPoint.x = x + dx;
+        nextPoint.y = y + dy;
+
+        int stepCost = computeTraversalCost(rst, currPoint, nextPoint);
+        if (stepCost == INT_MAX || cost > INT_MAX - stepCost) {
             return INT_MAX;
         }
 
-        int projectedUtil = rst->edgeUtils[edgeId] + 1;
-        if (projectedUtil > rst->edgeCaps[edgeId]) {
-            cost += projectedUtil - rst->edgeCaps[edgeId];
-        }
-
-        x = nextX;
-        y = nextY;
+        cost += stepCost;
+        x = nextPoint.x;
+        y = nextPoint.y;
     }
 
     return cost;
+}
+
+static point chooseCorner(routingInst *rst, point start, point end) {
+    point horizontalFirst;
+    horizontalFirst.x = end.x;
+    horizontalFirst.y = start.y;
+
+    point verticalFirst;
+    verticalFirst.x = start.x;
+    verticalFirst.y = end.y;
+
+    int horizontalFirstCost = computeStraightPathCost(rst, start, horizontalFirst);
+    if (horizontalFirstCost != INT_MAX) {
+        int secondLegCost = computeStraightPathCost(rst, horizontalFirst, end);
+        if (secondLegCost == INT_MAX || horizontalFirstCost > INT_MAX - secondLegCost) {
+            horizontalFirstCost = INT_MAX;
+        } else {
+            horizontalFirstCost += secondLegCost;
+        }
+    }
+
+    int verticalFirstCost = computeStraightPathCost(rst, start, verticalFirst);
+    if (verticalFirstCost != INT_MAX) {
+        int secondLegCost = computeStraightPathCost(rst, verticalFirst, end);
+        if (secondLegCost == INT_MAX || verticalFirstCost > INT_MAX - secondLegCost) {
+            verticalFirstCost = INT_MAX;
+        } else {
+            verticalFirstCost += secondLegCost;
+        }
+    }
+
+    if (verticalFirstCost < horizontalFirstCost) {
+        return verticalFirst;
+    }
+
+    return horizontalFirst;
 }
 
 static int addStraightSegment(routingInst *rst, segment *seg, point p1, point p2) {
@@ -105,13 +214,88 @@ static int addStraightSegment(routingInst *rst, segment *seg, point p1, point p2
     return 1;
 }
 
-static int appendStraightSegment(routingInst *rst, route *nroute, point p1, point p2) {
+static int isPointOnSegment(point p, segment *seg) {
+    if (seg == NULL) {
+        return 0;
+    }
+
+    if (seg->p1.x == seg->p2.x) {
+        if (p.x != seg->p1.x) {
+            return 0;
+        }
+
+        int minY = (seg->p1.y < seg->p2.y) ? seg->p1.y : seg->p2.y;
+        int maxY = (seg->p1.y > seg->p2.y) ? seg->p1.y : seg->p2.y;
+        return (p.y >= minY && p.y <= maxY) ? 1 : 0;
+    }
+
+    if (seg->p1.y == seg->p2.y) {
+        if (p.y != seg->p1.y) {
+            return 0;
+        }
+
+        int minX = (seg->p1.x < seg->p2.x) ? seg->p1.x : seg->p2.x;
+        int maxX = (seg->p1.x > seg->p2.x) ? seg->p1.x : seg->p2.x;
+        return (p.x >= minX && p.x <= maxX) ? 1 : 0;
+    }
+
+    return 0;
+}
+
+static int isPointOnRoute(route *nroute, point p) {
     if (nroute == NULL) {
+        return 0;
+    }
+
+    for (int segIndex = 0; segIndex < nroute->numSegs; segIndex++) {
+        if (isPointOnSegment(p, &(nroute->segments[segIndex]))) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int ensureRouteCapacity(route *nroute, int *segmentCapacity, int neededCapacity) {
+    if (nroute == NULL || segmentCapacity == NULL) {
+        return 0;
+    }
+
+    if (*segmentCapacity >= neededCapacity) {
+        return 1;
+    }
+
+    int newCapacity = (*segmentCapacity == 0) ? 4 : *segmentCapacity;
+    while (newCapacity < neededCapacity) {
+        newCapacity *= 2;
+    }
+
+    segment *newSegments = (segment *) realloc(nroute->segments, newCapacity * sizeof(segment));
+    if (newSegments == NULL) {
+        return 0;
+    }
+
+    for (int segIndex = *segmentCapacity; segIndex < newCapacity; segIndex++) {
+        newSegments[segIndex].numEdges = 0;
+        newSegments[segIndex].edges = NULL;
+    }
+
+    nroute->segments = newSegments;
+    *segmentCapacity = newCapacity;
+    return 1;
+}
+
+static int appendStraightSegment(routingInst *rst, route *nroute, int *segmentCapacity, point p1, point p2) {
+    if (nroute == NULL || segmentCapacity == NULL) {
         return 0;
     }
 
     if (p1.x == p2.x && p1.y == p2.y) {
         return 1;
+    }
+
+    if (!ensureRouteCapacity(nroute, segmentCapacity, nroute->numSegs + 1)) {
+        return 0;
     }
 
     if (!addStraightSegment(rst, &(nroute->segments[nroute->numSegs]), p1, p2)) {
@@ -122,42 +306,662 @@ static int appendStraightSegment(routingInst *rst, route *nroute, point p1, poin
     return 1;
 }
 
-static point chooseCorner(routingInst *rst, point start, point end) {
-    point horizontalFirst;
-    horizontalFirst.x = end.x;
-    horizontalFirst.y = start.y;
+typedef struct {
+    int pointIndex;
+    int priority;
+} searchState;
 
-    point verticalFirst;
-    verticalFirst.x = start.x;
-    verticalFirst.y = end.y;
+struct searchStateCompare {
+    bool operator()(const searchState &left, const searchState &right) const {
+        return left.priority > right.priority;
+    }
+};
 
-    // Compute the cost of the two possible L-shaped routes (horizontal first vs vertical first) and choose the one with lower cost. If one of them is not feasible (i.e. has infinite cost), choose the other one. If both are not feasible, it doesn't matter which one we return since both will fail when we try to add the straight segments later.
-    int horizontalFirstCost = computeStraightPathCost(rst, start, horizontalFirst);
-    if (horizontalFirstCost != INT_MAX) {
-        int secondLegCost = computeStraightPathCost(rst, horizontalFirst, end);
-        if (secondLegCost == INT_MAX) {
-            horizontalFirstCost = INT_MAX;
-        } else {
-            horizontalFirstCost += secondLegCost;
+static int findMinCostPathWithinBounds(
+    routingInst *rst,
+    point start,
+    point end,
+    point **pathOut,
+    int *pathLengthOut,
+    int minX,
+    int maxX,
+    int minY,
+    int maxY
+) {
+    if (rst == NULL || pathOut == NULL || pathLengthOut == NULL) {
+        return 0;
+    }
+
+    *pathOut = NULL;
+    *pathLengthOut = 0;
+
+    if (!isPointInGrid(rst, start) || !isPointInGrid(rst, end)) {
+        return 0;
+    }
+
+    if (start.x == end.x && start.y == end.y) {
+        *pathOut = (point *) malloc(sizeof(point));
+        if (*pathOut == NULL) {
+            return 0;
+        }
+        (*pathOut)[0] = start;
+        *pathLengthOut = 1;
+        return 1;
+    }
+
+    int numPoints = rst->gx * rst->gy;
+    int startIndex = pointToIndex(rst, start);
+    int endIndex = pointToIndex(rst, end);
+    int *gCost = (int *) malloc(numPoints * sizeof(int));
+    int *parent = (int *) malloc(numPoints * sizeof(int));
+    char *closed = (char *) malloc(numPoints * sizeof(char));
+    if (gCost == NULL || parent == NULL || closed == NULL) {
+        free(gCost);
+        free(parent);
+        free(closed);
+        return 0;
+    }
+
+    for (int pointIndex = 0; pointIndex < numPoints; pointIndex++) {
+        gCost[pointIndex] = INT_MAX;
+        parent[pointIndex] = -1;
+        closed[pointIndex] = 0;
+    }
+
+    std::priority_queue<searchState, std::vector<searchState>, searchStateCompare> frontier;
+    gCost[startIndex] = 0;
+    searchState startState;
+    startState.pointIndex = startIndex;
+    startState.priority = absInt(start.x - end.x) + absInt(start.y - end.y);
+    frontier.push(startState);
+
+    while (!frontier.empty()) {
+        searchState currState = frontier.top();
+        frontier.pop();
+
+        if (closed[currState.pointIndex]) {
+            continue;
+        }
+        closed[currState.pointIndex] = 1;
+
+        if (currState.pointIndex == endIndex) {
+            break;
+        }
+
+        point currPoint = indexToPoint(rst, currState.pointIndex);
+        const int dx[4] = {1, -1, 0, 0};
+        const int dy[4] = {0, 0, 1, -1};
+        for (int dir = 0; dir < 4; dir++) {
+            point nextPoint;
+            nextPoint.x = currPoint.x + dx[dir];
+            nextPoint.y = currPoint.y + dy[dir];
+            if (!isPointInGrid(rst, nextPoint)) {
+                continue;
+            }
+            if (nextPoint.x < minX || nextPoint.x > maxX || nextPoint.y < minY || nextPoint.y > maxY) {
+                continue;
+            }
+
+            int nextIndex = pointToIndex(rst, nextPoint);
+            if (closed[nextIndex]) {
+                continue;
+            }
+
+            int stepCost = computeTraversalCost(rst, currPoint, nextPoint);
+            if (stepCost == INT_MAX || gCost[currState.pointIndex] > INT_MAX - stepCost) {
+                continue;
+            }
+
+            int candidateCost = gCost[currState.pointIndex] + stepCost;
+            if (candidateCost < gCost[nextIndex]) {
+                gCost[nextIndex] = candidateCost;
+                parent[nextIndex] = currState.pointIndex;
+
+                int heuristic = absInt(nextPoint.x - end.x) + absInt(nextPoint.y - end.y);
+                searchState nextState;
+                nextState.pointIndex = nextIndex;
+                nextState.priority = (candidateCost > INT_MAX - heuristic) ? INT_MAX : candidateCost + heuristic;
+                frontier.push(nextState);
+            }
         }
     }
 
-    // Similarly compute the cost for vertical first
-    int verticalFirstCost = computeStraightPathCost(rst, start, verticalFirst);
-    if (verticalFirstCost != INT_MAX) {
-        int secondLegCost = computeStraightPathCost(rst, verticalFirst, end);
-        if (secondLegCost == INT_MAX) {
-            verticalFirstCost = INT_MAX;
-        } else {
-            verticalFirstCost += secondLegCost;
+    if (gCost[endIndex] == INT_MAX) {
+        free(gCost);
+        free(parent);
+        free(closed);
+        return 0;
+    }
+
+    int pathLength = 1;
+    for (int pointIndex = endIndex; pointIndex != startIndex; pointIndex = parent[pointIndex]) {
+        if (pointIndex < 0) {
+            free(gCost);
+            free(parent);
+            free(closed);
+            return 0;
+        }
+        pathLength++;
+    }
+
+    point *path = (point *) malloc(pathLength * sizeof(point));
+    if (path == NULL) {
+        free(gCost);
+        free(parent);
+        free(closed);
+        return 0;
+    }
+
+    int writeIndex = pathLength - 1;
+    for (int pointIndex = endIndex; writeIndex >= 0; pointIndex = parent[pointIndex]) {
+        path[writeIndex] = indexToPoint(rst, pointIndex);
+        if (pointIndex == startIndex) {
+            break;
+        }
+        writeIndex--;
+    }
+
+    *pathOut = path;
+    *pathLengthOut = pathLength;
+
+    free(gCost);
+    free(parent);
+    free(closed);
+    return 1;
+}
+
+static int findMinCostPath(routingInst *rst, point start, point end, point **pathOut, int *pathLengthOut) {
+    if (rst == NULL) {
+        return 0;
+    }
+
+    int fullMinX = 0;
+    int fullMaxX = rst->gx - 1;
+    int fullMinY = 0;
+    int fullMaxY = rst->gy - 1;
+
+    if (!gUseMinCostRouting) {
+        return findMinCostPathWithinBounds(rst, start, end, pathOut, pathLengthOut, fullMinX, fullMaxX, fullMinY, fullMaxY);
+    }
+
+    int minX = (start.x < end.x) ? start.x : end.x;
+    int maxX = (start.x > end.x) ? start.x : end.x;
+    int minY = (start.y < end.y) ? start.y : end.y;
+    int maxY = (start.y > end.y) ? start.y : end.y;
+    int pinDistance = absInt(start.x - end.x) + absInt(start.y - end.y);
+    int frameMargin = 8 + 4 * gRrrIteration + pinDistance / 8;
+    if (frameMargin > 96) {
+        frameMargin = 96;
+    }
+
+    minX -= frameMargin;
+    minY -= frameMargin;
+    maxX += frameMargin;
+    maxY += frameMargin;
+
+    if (minX < 0) minX = 0;
+    if (minY < 0) minY = 0;
+    if (maxX >= rst->gx) maxX = rst->gx - 1;
+    if (maxY >= rst->gy) maxY = rst->gy - 1;
+
+    if (findMinCostPathWithinBounds(rst, start, end, pathOut, pathLengthOut, minX, maxX, minY, maxY)) {
+        return 1;
+    }
+
+    return findMinCostPathWithinBounds(rst, start, end, pathOut, pathLengthOut, fullMinX, fullMaxX, fullMinY, fullMaxY);
+}
+
+static int appendPathAsSegments(routingInst *rst, route *nroute, int *segmentCapacity, point *path, int pathLength) {
+    if (rst == NULL || nroute == NULL || segmentCapacity == NULL || path == NULL || pathLength <= 0) {
+        return 0;
+    }
+
+    if (pathLength == 1) {
+        return 1;
+    }
+
+    point segmentStart = path[0];
+    int prevDx = path[1].x - path[0].x;
+    int prevDy = path[1].y - path[0].y;
+
+    for (int pointIndex = 2; pointIndex < pathLength; pointIndex++) {
+        int currDx = path[pointIndex].x - path[pointIndex - 1].x;
+        int currDy = path[pointIndex].y - path[pointIndex - 1].y;
+        if (currDx != prevDx || currDy != prevDy) {
+            if (!appendStraightSegment(rst, nroute, segmentCapacity, segmentStart, path[pointIndex - 1])) {
+                return 0;
+            }
+
+            segmentStart = path[pointIndex - 1];
+            prevDx = currDx;
+            prevDy = currDy;
         }
     }
 
-    if (verticalFirstCost < horizontalFirstCost) {
-        return verticalFirst;
+    return appendStraightSegment(rst, nroute, segmentCapacity, segmentStart, path[pathLength - 1]);
+}
+
+static void freeRoute(route *nroute) {
+    if (nroute == NULL || nroute->segments == NULL) {
+        return;
     }
 
-    return horizontalFirst;
+    for (int segIndex = 0; segIndex < nroute->numSegs; segIndex++) {
+        free(nroute->segments[segIndex].edges);
+    }
+
+    free(nroute->segments);
+    nroute->segments = NULL;
+    nroute->numSegs = 0;
+}
+
+static int applyRouteToEdgeUtils(routingInst *rst, route *nroute, int delta) {
+    if (rst == NULL || nroute == NULL) {
+        return 0;
+    }
+
+    for (int segIndex = 0; segIndex < nroute->numSegs; segIndex++) {
+        segment *currSeg = &(nroute->segments[segIndex]);
+        for (int edgeIndex = 0; edgeIndex < currSeg->numEdges; edgeIndex++) {
+            int edgeId = currSeg->edges[edgeIndex];
+            if (edgeId < 0 || edgeId >= rst->numEdges) {
+                return 0;
+            }
+
+            rst->edgeUtils[edgeId] += delta;
+            if (rst->edgeUtils[edgeId] < 0) {
+                return 0;
+            }
+        }
+    }
+
+    return 1;
+}
+
+static int copyRoute(route *src, route *dst) {
+    if (dst == NULL) {
+        return 0;
+    }
+
+    dst->numSegs = 0;
+    dst->segments = NULL;
+    if (src == NULL || src->numSegs == 0 || src->segments == NULL) {
+        return 1;
+    }
+
+    dst->segments = (segment *) malloc(src->numSegs * sizeof(segment));
+    if (dst->segments == NULL) {
+        return 0;
+    }
+
+    dst->numSegs = src->numSegs;
+    for (int segIndex = 0; segIndex < src->numSegs; segIndex++) {
+        dst->segments[segIndex].p1 = src->segments[segIndex].p1;
+        dst->segments[segIndex].p2 = src->segments[segIndex].p2;
+        dst->segments[segIndex].numEdges = src->segments[segIndex].numEdges;
+        dst->segments[segIndex].edges = NULL;
+
+        if (src->segments[segIndex].numEdges > 0) {
+            dst->segments[segIndex].edges = (int *) malloc(src->segments[segIndex].numEdges * sizeof(int));
+            if (dst->segments[segIndex].edges == NULL) {
+                freeRoute(dst);
+                return 0;
+            }
+
+            memcpy(
+                dst->segments[segIndex].edges,
+                src->segments[segIndex].edges,
+                src->segments[segIndex].numEdges * sizeof(int)
+            );
+        }
+    }
+
+    return 1;
+}
+
+static void freeRouteArray(route *routes, int numRoutes) {
+    if (routes == NULL) {
+        return;
+    }
+
+    for (int routeIndex = 0; routeIndex < numRoutes; routeIndex++) {
+        freeRoute(&(routes[routeIndex]));
+    }
+
+    free(routes);
+}
+
+static int copyAllRoutes(routingInst *rst, route **routesOut) {
+    if (rst == NULL || routesOut == NULL) {
+        return 0;
+    }
+
+    *routesOut = NULL;
+    route *copiedRoutes = (route *) malloc(rst->numNets * sizeof(route));
+    if (copiedRoutes == NULL) {
+        return 0;
+    }
+
+    for (int netIndex = 0; netIndex < rst->numNets; netIndex++) {
+        copiedRoutes[netIndex].numSegs = 0;
+        copiedRoutes[netIndex].segments = NULL;
+    }
+
+    for (int netIndex = 0; netIndex < rst->numNets; netIndex++) {
+        if (!copyRoute(&(rst->nets[netIndex].nroute), &(copiedRoutes[netIndex]))) {
+            freeRouteArray(copiedRoutes, rst->numNets);
+            return 0;
+        }
+    }
+
+    *routesOut = copiedRoutes;
+    return 1;
+}
+
+static int restoreAllRoutes(routingInst *rst, route *savedRoutes) {
+    if (rst == NULL || savedRoutes == NULL) {
+        return 0;
+    }
+
+    clearAllRoutes(rst);
+    for (int netIndex = 0; netIndex < rst->numNets; netIndex++) {
+        if (!copyRoute(&(savedRoutes[netIndex]), &(rst->nets[netIndex].nroute))) {
+            clearAllRoutes(rst);
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int rebuildEdgeUtilsFromRoutes(routingInst *rst) {
+    if (rst == NULL || rst->edgeUtils == NULL || rst->nets == NULL) {
+        return 0;
+    }
+
+    for (int edgeIndex = 0; edgeIndex < rst->numEdges; edgeIndex++) {
+        rst->edgeUtils[edgeIndex] = 0;
+    }
+
+    for (int netIndex = 0; netIndex < rst->numNets; netIndex++) {
+        if (!applyRouteToEdgeUtils(rst, &(rst->nets[netIndex].nroute), 1)) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static long long computeTotalWirelength(routingInst *rst) {
+    if (rst == NULL || rst->nets == NULL) {
+        return -1;
+    }
+
+    long long totalWirelength = 0;
+    for (int netIndex = 0; netIndex < rst->numNets; netIndex++) {
+        for (int segIndex = 0; segIndex < rst->nets[netIndex].nroute.numSegs; segIndex++) {
+            totalWirelength += rst->nets[netIndex].nroute.segments[segIndex].numEdges;
+        }
+    }
+
+    return totalWirelength;
+}
+
+static long long computeTotalOverflow(routingInst *rst) {
+    if (rst == NULL || rst->edgeUtils == NULL || rst->edgeCaps == NULL) {
+        return -1;
+    }
+
+    long long totalOverflow = 0;
+    for (int edgeIndex = 0; edgeIndex < rst->numEdges; edgeIndex++) {
+        int overflow = rst->edgeUtils[edgeIndex] - rst->edgeCaps[edgeIndex];
+        if (overflow > 0) {
+            totalOverflow += overflow;
+        }
+    }
+
+    return totalOverflow;
+}
+
+static int rerouteNetsByOrdering(routingInst *rst, int *ordering) {
+    if (rst == NULL || rst->nets == NULL) {
+        return 0;
+    }
+
+    for (int orderedIndex = 0; orderedIndex < rst->numNets; orderedIndex++) {
+        int netIndex = (ordering == NULL) ? orderedIndex : ordering[orderedIndex];
+        net *currNet = &(rst->nets[netIndex]);
+
+        if (!applyRouteToEdgeUtils(rst, &(currNet->nroute), -1)) {
+            return 0;
+        }
+        updateRouteEdgeWeights(rst, &(currNet->nroute), TRUE);
+
+        freeRoute(&(currNet->nroute));
+        if (!routeSingleNet(rst, currNet)) {
+            return 0;
+        }
+        updateRouteEdgeWeights(rst, &(currNet->nroute), TRUE);
+    }
+
+    return 1;
+}
+
+static int routeSingleNet(routingInst *rst, net *currNet) {
+    if (currNet == NULL || currNet->numPins < 1 || currNet->pins == NULL) {
+        return 0;
+    }
+
+    currNet->nroute.numSegs = 0;
+    currNet->nroute.segments = NULL;
+    int segmentCapacity = 0;
+
+    if (currNet->numPins == 1) {
+        return 1;
+    }
+
+    // Route in the current pin order. If we have pins A, B, C, we route A->B and
+    // then B->C.
+    for (int pinIndex = 1; pinIndex < currNet->numPins; pinIndex++) {
+        point start = currNet->pins[pinIndex - 1];
+        point end = currNet->pins[pinIndex];
+
+        if (!isPointInGrid(rst, start) || !isPointInGrid(rst, end)) {
+            freeRoute(&(currNet->nroute));
+            return 0;
+        }
+
+        // If this pin already lies on the current route tree, there is no need
+        // to add a backtracking path just to visit it again.
+        if (currNet->nroute.numSegs > 0 && isPointOnRoute(&(currNet->nroute), end)) {
+            continue;
+        }
+
+        if (!gUseMinCostRouting) {
+            if (start.x == end.x || start.y == end.y) {
+                if (!appendStraightSegment(rst, &(currNet->nroute), &segmentCapacity, start, end)) {
+                    freeRoute(&(currNet->nroute));
+                    return 0;
+                }
+            } else {
+                point corner = chooseCorner(rst, start, end);
+                if (!appendStraightSegment(rst, &(currNet->nroute), &segmentCapacity, start, corner) ||
+                    !appendStraightSegment(rst, &(currNet->nroute), &segmentCapacity, corner, end)) {
+                    freeRoute(&(currNet->nroute));
+                    return 0;
+                }
+            }
+        } else {
+            point *path = NULL;
+            int pathLength = 0;
+            if (!findMinCostPath(rst, start, end, &path, &pathLength)) {
+                freeRoute(&(currNet->nroute));
+                return 0;
+            }
+
+            int appendStatus = appendPathAsSegments(rst, &(currNet->nroute), &segmentCapacity, path, pathLength);
+            free(path);
+            if (!appendStatus) {
+                freeRoute(&(currNet->nroute));
+                return 0;
+            }
+        }
+    }
+
+    if (currNet->nroute.numSegs == 0) {
+        free(currNet->nroute.segments);
+        currNet->nroute.segments = NULL;
+    } else {
+        segment *shrunkSegments = (segment *) realloc(
+            currNet->nroute.segments,
+            currNet->nroute.numSegs * sizeof(segment)
+        );
+        if (shrunkSegments != NULL) {
+            currNet->nroute.segments = shrunkSegments;
+        }
+    }
+
+    return 1;
+}
+
+static void updateAllEdgeWeights(routingInst *rst, int updateHistory) {
+    if (rst == NULL) {
+        return;
+    }
+
+    for (int edgeIndex = 0; edgeIndex < rst->numEdges; edgeIndex++) {
+        recomputeEdgeWeight(rst, edgeIndex, updateHistory);
+    }
+}
+
+static void updateRouteEdgeWeights(routingInst *rst, route *nroute, int updateHistory) {
+    if (rst == NULL || nroute == NULL || rst->numEdges <= 0) {
+        return;
+    }
+
+    char *seenEdges = (char *) calloc(rst->numEdges, sizeof(char));
+    if (seenEdges == NULL) {
+        updateAllEdgeWeights(rst, updateHistory);
+        return;
+    }
+
+    for (int segIndex = 0; segIndex < nroute->numSegs; segIndex++) {
+        segment *currSeg = &(nroute->segments[segIndex]);
+        for (int edgeIndex = 0; edgeIndex < currSeg->numEdges; edgeIndex++) {
+            int edgeId = currSeg->edges[edgeIndex];
+            if (edgeId < 0 || edgeId >= rst->numEdges || seenEdges[edgeId]) {
+                continue;
+            }
+
+            seenEdges[edgeId] = 1;
+            recomputeEdgeWeight(rst, edgeId, updateHistory);
+        }
+    }
+
+    free(seenEdges);
+}
+
+static void clearAllRoutes(routingInst *rst) {
+    if (rst == NULL || rst->nets == NULL) {
+        return;
+    }
+
+    for (int netIndex = 0; netIndex < rst->numNets; netIndex++) {
+        freeRoute(&(rst->nets[netIndex].nroute));
+    }
+}
+
+static int computeNetRouteCost(routingInst *rst, net *currNet) {
+    if (rst == NULL || currNet == NULL) {
+        return 0;
+    }
+
+    int cost = 0;
+    for (int segIndex = 0; segIndex < currNet->nroute.numSegs; segIndex++) {
+        segment *currSeg = &(currNet->nroute.segments[segIndex]);
+        for (int edgeIndex = 0; edgeIndex < currSeg->numEdges; edgeIndex++) {
+            int edgeId = currSeg->edges[edgeIndex];
+            if (edgeId >= 0 && edgeId < rst->numEdges) {
+                cost += rst->edgeWeights[edgeId];
+            }
+        }
+    }
+
+    return cost;
+}
+
+typedef struct {
+    int netIndex;
+    int cost;
+} netOrderingEntry;
+
+static int compareNetOrderingEntries(const void *leftVoid, const void *rightVoid) {
+    const netOrderingEntry *left = (const netOrderingEntry *) leftVoid;
+    const netOrderingEntry *right = (const netOrderingEntry *) rightVoid;
+
+    if (left->cost < right->cost) {
+        return 1;
+    }
+    if (left->cost > right->cost) {
+        return -1;
+    }
+
+    if (left->netIndex > right->netIndex) {
+        return 1;
+    }
+    if (left->netIndex < right->netIndex) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int *buildNetOrdering(routingInst *rst) {
+    if (rst == NULL || rst->nets == NULL) {
+        return NULL;
+    }
+
+    if (rst->numNets == 0) {
+        return (int *) malloc(sizeof(int));
+    }
+
+    netOrderingEntry *entries = (netOrderingEntry *) malloc(rst->numNets * sizeof(netOrderingEntry));
+    int *ordering = (int *) malloc(rst->numNets * sizeof(int));
+    if (entries == NULL || ordering == NULL) {
+        free(entries);
+        free(ordering);
+        return NULL;
+    }
+
+    for (int netIndex = 0; netIndex < rst->numNets; netIndex++) {
+        entries[netIndex].netIndex = netIndex;
+        entries[netIndex].cost = computeNetRouteCost(rst, &(rst->nets[netIndex]));
+    }
+
+    qsort(entries, rst->numNets, sizeof(netOrderingEntry), compareNetOrderingEntries);
+
+    for (int netIndex = 0; netIndex < rst->numNets; netIndex++) {
+        ordering[netIndex] = entries[netIndex].netIndex;
+    }
+
+    free(entries);
+    return ordering;
+}
+
+static int routeNetsByOrdering(routingInst *rst, int *ordering) {
+    if (rst == NULL || rst->nets == NULL) {
+        return 0;
+    }
+
+    for (int orderedIndex = 0; orderedIndex < rst->numNets; orderedIndex++) {
+        int netIndex = (ordering == NULL) ? orderedIndex : ordering[orderedIndex];
+        if (!routeSingleNet(rst, &(rst->nets[netIndex]))) {
+            clearAllRoutes(rst);
+            return 0;
+        }
+    }
+
+    return 1;
 }
 
 int readBenchmark(const char *fileName, routingInst *rst) {
@@ -249,6 +1053,7 @@ int readBenchmark(const char *fileName, routingInst *rst) {
         }
 
         rst->nets[i].nroute.numSegs = 0;
+        rst->nets[i].nroute.segments = NULL;
     }
 
     // Edge numbering follows what was recommended in the slides.
@@ -318,92 +1123,86 @@ int solveRouting(routingInst *rst) {
     }
 
 
-    ////////// ADDED IN PART 2 /////////////////
-    // printRoutingInst(rst, TRUE);
-    reorderPins(rst);
-    // printRoutingInst(rst, TRUE);
-    ////////////////////////////////////////////
+    if (gUsePinOrdering) {
+        reorderPins(rst);
+    }
 
-    // For each net, we will route in the order of the pins given.
-    for (int i = 0; i < rst->numNets; i++) {
+    gRrrIteration = 0;
+    gUseMinCostRouting = 0;
 
-        net *currNet = &(rst->nets[i]);
-        if (currNet->numPins < 1 || currNet->pins == NULL) {
+    if (!routeNetsByOrdering(rst, NULL)) {
+        return 0;
+    }
+
+    if (!gUseNetOrderingAndRrr) {
+        return 1;
+    }
+
+    updateAllEdgeWeights(rst, FALSE);
+
+    route *bestRoutes = NULL;
+    long long bestOverflow = computeTotalOverflow(rst);
+    long long bestWirelength = computeTotalWirelength(rst);
+    if (bestOverflow < 0 || bestWirelength < 0 || !copyAllRoutes(rst, &bestRoutes)) {
+        clearAllRoutes(rst);
+        return 0;
+    }
+
+    int SECONDS_TO_WAIT = 45; /* 5 * 60; */ // Minimum amount of time was 5 minutes
+    int firstRrrIteration = 1;
+    while (firstRrrIteration || !checkTime(&begin, SECONDS_TO_WAIT)) {
+        firstRrrIteration = 0;
+        gRrrIteration++;
+        gUseMinCostRouting = 1;
+
+        // Apply net ordering from the part 2 slide deck:
+        // cost(n) = sum of W_e over the stored route of n, then route high-cost nets first.
+        int *netOrdering = buildNetOrdering(rst);
+        if (netOrdering == NULL) {
+            freeRouteArray(bestRoutes, rst->numNets);
+            clearAllRoutes(rst);
             return 0;
         }
 
-        currNet->nroute.numSegs = 0;
-        currNet->nroute.segments = NULL;
-
-        // The maximum number of segments we would need is 2 * (numPins - 1) since each pair of pins can require at most 2 segments (i.e. an L-shaped route).
-        int maxNumSegs = 2 * (currNet->numPins - 1);
-        if (maxNumSegs == 0) {
-            continue;
-        }
-
-        currNet->nroute.segments = (segment *) malloc(maxNumSegs * sizeof(segment));
-        if (currNet->nroute.segments == NULL) {
+        if (!rerouteNetsByOrdering(rst, netOrdering)) {
+            free(netOrdering);
+            freeRouteArray(bestRoutes, rst->numNets);
             return 0;
         }
 
-        // Initialize all segments to have 0 edges and NULL edge arrays since we haven't added any segments yet
-        for (int segIndex = 0; segIndex < maxNumSegs; segIndex++) {
-            currNet->nroute.segments[segIndex].numEdges = 0;
-            currNet->nroute.segments[segIndex].edges = NULL;
-        }
+        free(netOrdering);
 
-        // Route in the order of the pins given. So if we have pins A, B, C, we will route A to B first and then B to C.
-        for (int pinIndex = 1; pinIndex < currNet->numPins; pinIndex++) {
-            point start = currNet->pins[pinIndex - 1];
-            point end = currNet->pins[pinIndex];
-
-            if (!isPointInGrid(rst, start) || !isPointInGrid(rst, end)) {
+        long long currOverflow = computeTotalOverflow(rst);
+        long long currWirelength = computeTotalWirelength(rst);
+        if (currOverflow < bestOverflow ||
+            (currOverflow == bestOverflow && currWirelength < bestWirelength)) {
+            route *newBestRoutes = NULL;
+            if (!copyAllRoutes(rst, &newBestRoutes)) {
+                freeRouteArray(bestRoutes, rst->numNets);
+                clearAllRoutes(rst);
                 return 0;
             }
 
-            if (start.x == end.x || start.y == end.y) {
-                if (!appendStraightSegment(rst, &(currNet->nroute), start, end)) {
-                    return 0;
-                }
-                continue;
-            }
-
-            point corner = chooseCorner(rst, start, end);
-            if (!appendStraightSegment(rst, &(currNet->nroute), start, corner)) {
-                return 0;
-            }
-            if (!appendStraightSegment(rst, &(currNet->nroute), corner, end)) {
-                return 0;
-            }
-        }
-
-        if (currNet->nroute.numSegs == 0) {
-            free(currNet->nroute.segments);
-            currNet->nroute.segments = NULL;
-        } else {
-            segment *shrunkSegments = (segment *) realloc(
-                currNet->nroute.segments,
-                currNet->nroute.numSegs * sizeof(segment)
-            );
-            if (shrunkSegments != NULL) {
-                currNet->nroute.segments = shrunkSegments;
-            }
+            freeRouteArray(bestRoutes, rst->numNets);
+            bestRoutes = newBestRoutes;
+            bestOverflow = currOverflow;
+            bestWirelength = currWirelength;
         }
     }
 
-    // TODO: RRR, etc.
-    for (int i = 0; i < rst->numEdges; i++) {
-        updateEdgeWeights(rst, i);
+    if (!restoreAllRoutes(rst, bestRoutes)) {
+        freeRouteArray(bestRoutes, rst->numNets);
+        return 0;
     }
 
-    int SECONDS_TO_WAIT = 20; /* 5 * 60; */ // Minimum amount of time was 5 minutes
-    while (!checkTime(&begin, SECONDS_TO_WAIT)) {
-        // Do this
-        printf("WAITING...\n");
-        // https://stackoverflow.com/questions/7684359/how-to-use-nanosleep-in-c-what-are-tim-tv-sec-and-tim-tv-nsec
-        nanosleep((const struct timespec[]){{5, 0}}, NULL);
+    if (!rebuildEdgeUtilsFromRoutes(rst)) {
+        freeRouteArray(bestRoutes, rst->numNets);
+        clearAllRoutes(rst);
+        return 0;
     }
 
+    gUseMinCostRouting = 0;
+    freeRouteArray(bestRoutes, rst->numNets);
     return 1;
 }
 
@@ -567,15 +1366,7 @@ void reorderPins(routingInst* rst) {
  * @param index 0-indexed edge to update weights for
  */
 void updateEdgeWeights(routingInst* rst, int index) {
-    int overflow_e = rst->edgeUtils[index] - rst->edgeCaps[index];
-
-    // C does not have a max() function, so this changes it to 0 if 0 > u_e - c_e
-    // Only if overflow_e is nonzero do we increment edgeHistory
-    // Thus we can perform the check and implement edgesHistory at the same time
-    if (overflow_e <= 0) overflow_e = 0;
-    else rst->edgeHistory[index]++;
-
-    rst->edgeWeights[index] = rst->edgeHistory[index] * overflow_e;
+    recomputeEdgeWeight(rst, index, TRUE);
 }
 
 int checkTime(time_t* begin, int NUM_SECONDS) {

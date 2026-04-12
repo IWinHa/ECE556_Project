@@ -118,6 +118,8 @@ void extraFunc();
 // Calculates the edge number according to the slide recommendation from Part 1.
 int calculateEdgeNumber(routingInst* rst, int x_1, int x_2, int y_1, int y_2);
 
+// Configure whether part 2 pin ordering and net ordering / RRR are enabled.
+void setRoutingMode(int usePinOrdering, int useNetOrderingAndRrr);
 
 /******************** ADDED PART 2 METHODS!!! ********************/
 void reorderPins(routingInst* rst);
