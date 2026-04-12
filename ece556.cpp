@@ -23,6 +23,7 @@ static int routeSingleNet(routingInst *rst, net *currNet);
 static void recomputeEdgeWeight(routingInst *rst, int index, int updateHistory);
 static void updateAllEdgeWeights(routingInst *rst, int updateHistory);
 static void updateRouteEdgeWeights(routingInst *rst, route *nroute, int updateHistory);
+static int findMinCostPathToRoute(routingInst *rst, point start, route *targetRoute, point **pathOut, int *pathLengthOut);
 
 void setRoutingMode(int usePinOrdering, int useNetOrderingAndRrr) {
     gUsePinOrdering = usePinOrdering ? 1 : 0;
@@ -511,6 +512,329 @@ static int findMinCostPath(routingInst *rst, point start, point end, point **pat
     return findMinCostPathWithinBounds(rst, start, end, pathOut, pathLengthOut, fullMinX, fullMaxX, fullMinY, fullMaxY);
 }
 
+static void computeRouteBoundingBox(route *nroute, int *minX, int *maxX, int *minY, int *maxY) {
+    if (nroute == NULL || nroute->numSegs <= 0 || minX == NULL || maxX == NULL || minY == NULL || maxY == NULL) {
+        return;
+    }
+
+    *minX = nroute->segments[0].p1.x;
+    *maxX = nroute->segments[0].p1.x;
+    *minY = nroute->segments[0].p1.y;
+    *maxY = nroute->segments[0].p1.y;
+
+    for (int segIndex = 0; segIndex < nroute->numSegs; segIndex++) {
+        segment *currSeg = &(nroute->segments[segIndex]);
+        point segmentPoints[2] = {currSeg->p1, currSeg->p2};
+        for (int pointIndex = 0; pointIndex < 2; pointIndex++) {
+            point currPoint = segmentPoints[pointIndex];
+            if (currPoint.x < *minX) *minX = currPoint.x;
+            if (currPoint.x > *maxX) *maxX = currPoint.x;
+            if (currPoint.y < *minY) *minY = currPoint.y;
+            if (currPoint.y > *maxY) *maxY = currPoint.y;
+        }
+    }
+}
+
+static int populateRoutePointMask(routingInst *rst, route *nroute, char *routePointMask) {
+    if (rst == NULL || nroute == NULL || routePointMask == NULL) {
+        return 0;
+    }
+
+    for (int segIndex = 0; segIndex < nroute->numSegs; segIndex++) {
+        segment *currSeg = &(nroute->segments[segIndex]);
+        point currPoint = currSeg->p1;
+        if (!isPointInGrid(rst, currPoint)) {
+            return 0;
+        }
+
+        routePointMask[pointToIndex(rst, currPoint)] = 1;
+
+        int dx = (currSeg->p2.x > currSeg->p1.x) ? 1 : ((currSeg->p2.x < currSeg->p1.x) ? -1 : 0);
+        int dy = (currSeg->p2.y > currSeg->p1.y) ? 1 : ((currSeg->p2.y < currSeg->p1.y) ? -1 : 0);
+        int numSteps = absInt(currSeg->p2.x - currSeg->p1.x) + absInt(currSeg->p2.y - currSeg->p1.y);
+        for (int step = 0; step < numSteps; step++) {
+            currPoint.x += dx;
+            currPoint.y += dy;
+            if (!isPointInGrid(rst, currPoint)) {
+                return 0;
+            }
+
+            routePointMask[pointToIndex(rst, currPoint)] = 1;
+        }
+    }
+
+    return 1;
+}
+
+static int distanceToBox(point p, int minX, int maxX, int minY, int maxY) {
+    int dx = 0;
+    int dy = 0;
+
+    if (p.x < minX) {
+        dx = minX - p.x;
+    } else if (p.x > maxX) {
+        dx = p.x - maxX;
+    }
+
+    if (p.y < minY) {
+        dy = minY - p.y;
+    } else if (p.y > maxY) {
+        dy = p.y - maxY;
+    }
+
+    return dx + dy;
+}
+
+static int findMinCostPathToRouteWithinBounds(
+    routingInst *rst,
+    point start,
+    route *targetRoute,
+    point **pathOut,
+    int *pathLengthOut,
+    int minX,
+    int maxX,
+    int minY,
+    int maxY
+) {
+    if (rst == NULL || targetRoute == NULL || pathOut == NULL || pathLengthOut == NULL) {
+        return 0;
+    }
+
+    *pathOut = NULL;
+    *pathLengthOut = 0;
+
+    if (!isPointInGrid(rst, start) || targetRoute->numSegs <= 0 || targetRoute->segments == NULL) {
+        return 0;
+    }
+
+    int numPoints = rst->gx * rst->gy;
+    char *routePointMask = (char *) calloc(numPoints, sizeof(char));
+    int *gCost = (int *) malloc(numPoints * sizeof(int));
+    int *parent = (int *) malloc(numPoints * sizeof(int));
+    char *closed = (char *) malloc(numPoints * sizeof(char));
+    if (routePointMask == NULL || gCost == NULL || parent == NULL || closed == NULL) {
+        free(routePointMask);
+        free(gCost);
+        free(parent);
+        free(closed);
+        return 0;
+    }
+
+    if (!populateRoutePointMask(rst, targetRoute, routePointMask)) {
+        free(routePointMask);
+        free(gCost);
+        free(parent);
+        free(closed);
+        return 0;
+    }
+
+    int routeMinX = 0;
+    int routeMaxX = 0;
+    int routeMinY = 0;
+    int routeMaxY = 0;
+    computeRouteBoundingBox(targetRoute, &routeMinX, &routeMaxX, &routeMinY, &routeMaxY);
+
+    int startIndex = pointToIndex(rst, start);
+    if (routePointMask[startIndex]) {
+        *pathOut = (point *) malloc(sizeof(point));
+        if (*pathOut == NULL) {
+            free(routePointMask);
+            free(gCost);
+            free(parent);
+            free(closed);
+            return 0;
+        }
+
+        (*pathOut)[0] = start;
+        *pathLengthOut = 1;
+        free(routePointMask);
+        free(gCost);
+        free(parent);
+        free(closed);
+        return 1;
+    }
+
+    for (int pointIndex = 0; pointIndex < numPoints; pointIndex++) {
+        gCost[pointIndex] = INT_MAX;
+        parent[pointIndex] = -1;
+        closed[pointIndex] = 0;
+    }
+
+    std::priority_queue<searchState, std::vector<searchState>, searchStateCompare> frontier;
+    gCost[startIndex] = 0;
+    searchState startState;
+    startState.pointIndex = startIndex;
+    startState.priority = distanceToBox(start, routeMinX, routeMaxX, routeMinY, routeMaxY);
+    frontier.push(startState);
+
+    int foundIndex = -1;
+    while (!frontier.empty()) {
+        searchState currState = frontier.top();
+        frontier.pop();
+
+        if (closed[currState.pointIndex]) {
+            continue;
+        }
+        closed[currState.pointIndex] = 1;
+
+        if (routePointMask[currState.pointIndex]) {
+            foundIndex = currState.pointIndex;
+            break;
+        }
+
+        point currPoint = indexToPoint(rst, currState.pointIndex);
+        const int dx[4] = {1, -1, 0, 0};
+        const int dy[4] = {0, 0, 1, -1};
+        for (int dir = 0; dir < 4; dir++) {
+            point nextPoint;
+            nextPoint.x = currPoint.x + dx[dir];
+            nextPoint.y = currPoint.y + dy[dir];
+            if (!isPointInGrid(rst, nextPoint)) {
+                continue;
+            }
+            if (nextPoint.x < minX || nextPoint.x > maxX || nextPoint.y < minY || nextPoint.y > maxY) {
+                continue;
+            }
+
+            int nextIndex = pointToIndex(rst, nextPoint);
+            if (closed[nextIndex]) {
+                continue;
+            }
+
+            int stepCost = computeTraversalCost(rst, currPoint, nextPoint);
+            if (stepCost == INT_MAX || gCost[currState.pointIndex] > INT_MAX - stepCost) {
+                continue;
+            }
+
+            int candidateCost = gCost[currState.pointIndex] + stepCost;
+            if (candidateCost < gCost[nextIndex]) {
+                gCost[nextIndex] = candidateCost;
+                parent[nextIndex] = currState.pointIndex;
+
+                int heuristic = distanceToBox(nextPoint, routeMinX, routeMaxX, routeMinY, routeMaxY);
+                searchState nextState;
+                nextState.pointIndex = nextIndex;
+                nextState.priority = (candidateCost > INT_MAX - heuristic) ? INT_MAX : candidateCost + heuristic;
+                frontier.push(nextState);
+            }
+        }
+    }
+
+    if (foundIndex < 0) {
+        free(routePointMask);
+        free(gCost);
+        free(parent);
+        free(closed);
+        return 0;
+    }
+
+    int pathLength = 1;
+    for (int pointIndex = foundIndex; pointIndex != startIndex; pointIndex = parent[pointIndex]) {
+        if (pointIndex < 0) {
+            free(routePointMask);
+            free(gCost);
+            free(parent);
+            free(closed);
+            return 0;
+        }
+        pathLength++;
+    }
+
+    point *path = (point *) malloc(pathLength * sizeof(point));
+    if (path == NULL) {
+        free(routePointMask);
+        free(gCost);
+        free(parent);
+        free(closed);
+        return 0;
+    }
+
+    int writeIndex = pathLength - 1;
+    for (int pointIndex = foundIndex; writeIndex >= 0; pointIndex = parent[pointIndex]) {
+        path[writeIndex] = indexToPoint(rst, pointIndex);
+        if (pointIndex == startIndex) {
+            break;
+        }
+        writeIndex--;
+    }
+
+    *pathOut = path;
+    *pathLengthOut = pathLength;
+
+    free(routePointMask);
+    free(gCost);
+    free(parent);
+    free(closed);
+    return 1;
+}
+
+static int findMinCostPathToRoute(routingInst *rst, point start, route *targetRoute, point **pathOut, int *pathLengthOut) {
+    if (rst == NULL || targetRoute == NULL || targetRoute->numSegs <= 0 || targetRoute->segments == NULL) {
+        return 0;
+    }
+
+    int fullMinX = 0;
+    int fullMaxX = rst->gx - 1;
+    int fullMinY = 0;
+    int fullMaxY = rst->gy - 1;
+
+    if (!gUseMinCostRouting) {
+        return findMinCostPathToRouteWithinBounds(
+            rst,
+            start,
+            targetRoute,
+            pathOut,
+            pathLengthOut,
+            fullMinX,
+            fullMaxX,
+            fullMinY,
+            fullMaxY
+        );
+    }
+
+    int routeMinX = 0;
+    int routeMaxX = 0;
+    int routeMinY = 0;
+    int routeMaxY = 0;
+    computeRouteBoundingBox(targetRoute, &routeMinX, &routeMaxX, &routeMinY, &routeMaxY);
+
+    int minX = (start.x < routeMinX) ? start.x : routeMinX;
+    int maxX = (start.x > routeMaxX) ? start.x : routeMaxX;
+    int minY = (start.y < routeMinY) ? start.y : routeMinY;
+    int maxY = (start.y > routeMaxY) ? start.y : routeMaxY;
+    int pinDistance = distanceToBox(start, routeMinX, routeMaxX, routeMinY, routeMaxY);
+    int frameMargin = 8 + 4 * gRrrIteration + pinDistance / 8;
+    if (frameMargin > 96) {
+        frameMargin = 96;
+    }
+
+    minX -= frameMargin;
+    minY -= frameMargin;
+    maxX += frameMargin;
+    maxY += frameMargin;
+
+    if (minX < 0) minX = 0;
+    if (minY < 0) minY = 0;
+    if (maxX >= rst->gx) maxX = rst->gx - 1;
+    if (maxY >= rst->gy) maxY = rst->gy - 1;
+
+    if (findMinCostPathToRouteWithinBounds(rst, start, targetRoute, pathOut, pathLengthOut, minX, maxX, minY, maxY)) {
+        return 1;
+    }
+
+    return findMinCostPathToRouteWithinBounds(
+        rst,
+        start,
+        targetRoute,
+        pathOut,
+        pathLengthOut,
+        fullMinX,
+        fullMaxX,
+        fullMinY,
+        fullMaxY
+    );
+}
+
 static int appendPathAsSegments(routingInst *rst, route *nroute, int *segmentCapacity, point *path, int pathLength) {
     if (rst == NULL || nroute == NULL || segmentCapacity == NULL || path == NULL || pathLength <= 0) {
         return 0;
@@ -760,8 +1084,9 @@ static int routeSingleNet(routingInst *rst, net *currNet) {
         return 1;
     }
 
-    // Route in the current pin order. If we have pins A, B, C, we route A->B and
-    // then B->C.
+    // Route pins in order. During the RRR stage, connect each new pin to the
+    // current route tree rather than forcing a simple pin-to-pin chain; this
+    // gives the min-cost router freedom to build a lower-overflow tree.
     for (int pinIndex = 1; pinIndex < currNet->numPins; pinIndex++) {
         point start = currNet->pins[pinIndex - 1];
         point end = currNet->pins[pinIndex];
@@ -791,10 +1116,24 @@ static int routeSingleNet(routingInst *rst, net *currNet) {
                     return 0;
                 }
             }
-        } else {
+        } else if (currNet->nroute.numSegs == 0) {
             point *path = NULL;
             int pathLength = 0;
             if (!findMinCostPath(rst, start, end, &path, &pathLength)) {
+                freeRoute(&(currNet->nroute));
+                return 0;
+            }
+
+            int appendStatus = appendPathAsSegments(rst, &(currNet->nroute), &segmentCapacity, path, pathLength);
+            free(path);
+            if (!appendStatus) {
+                freeRoute(&(currNet->nroute));
+                return 0;
+            }
+        } else {
+            point *path = NULL;
+            int pathLength = 0;
+            if (!findMinCostPathToRoute(rst, end, &(currNet->nroute), &path, &pathLength)) {
                 freeRoute(&(currNet->nroute));
                 return 0;
             }
