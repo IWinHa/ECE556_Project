@@ -24,6 +24,8 @@ static void recomputeEdgeWeight(routingInst *rst, int index, int updateHistory);
 static void updateAllEdgeWeights(routingInst *rst, int updateHistory);
 static void updateRouteEdgeWeights(routingInst *rst, route *nroute, int updateHistory);
 static int findMinCostPathToRoute(routingInst *rst, point start, route *targetRoute, point **pathOut, int *pathLengthOut);
+static int computeRrrTimeBudgetSeconds(routingInst *rst);
+static int computeRerouteNetLimit(routingInst *rst);
 
 void setRoutingMode(int usePinOrdering, int useNetOrderingAndRrr) {
     gUsePinOrdering = usePinOrdering ? 1 : 0;
@@ -37,6 +39,62 @@ static int absInt(int value) {
 static int computeOverflowAmount(int utilization, int capacity) {
     int overflow = utilization - capacity;
     return (overflow > 0) ? overflow : 0;
+}
+
+static int computeRrrTimeBudgetSeconds(routingInst *rst) {
+    if (rst == NULL) {
+        return 45;
+    }
+
+    long long gridPoints = (long long) rst->gx * (long long) rst->gy;
+    int budgetSeconds = 45;
+
+    if (rst->numNets >= 350000 || gridPoints >= 550000) {
+        budgetSeconds = 180;
+    } else if (rst->numNets >= 250000 || gridPoints >= 350000) {
+        budgetSeconds = 120;
+    } else if (rst->numNets >= 150000 || gridPoints >= 150000) {
+        budgetSeconds = 75;
+    }
+
+    return budgetSeconds;
+}
+
+static int computeRerouteNetLimit(routingInst *rst) {
+    if (rst == NULL || rst->numNets <= 0) {
+        return 0;
+    }
+
+    long long gridPoints = (long long) rst->gx * (long long) rst->gy;
+    int rerouteLimit = rst->numNets;
+
+    // On very large benchmarks, spend the first few iterations on the most
+    // congested nets so RRR can produce visible progress before the time budget
+    // expires. Smaller benchmarks still reroute every net each pass.
+    if (rst->numNets >= 300000 || gridPoints >= 500000) {
+        if (gRrrIteration <= 1) {
+            rerouteLimit = rst->numNets / 8;
+        } else if (gRrrIteration == 2) {
+            rerouteLimit = rst->numNets / 4;
+        } else if (gRrrIteration == 3) {
+            rerouteLimit = rst->numNets / 2;
+        }
+    } else if (rst->numNets >= 200000 || gridPoints >= 300000) {
+        if (gRrrIteration <= 1) {
+            rerouteLimit = rst->numNets / 4;
+        } else if (gRrrIteration == 2) {
+            rerouteLimit = rst->numNets / 2;
+        }
+    }
+
+    if (rerouteLimit < 1) {
+        rerouteLimit = 1;
+    }
+    if (rerouteLimit > rst->numNets) {
+        rerouteLimit = rst->numNets;
+    }
+
+    return rerouteLimit;
 }
 
 static void recomputeEdgeWeight(routingInst *rst, int index, int updateHistory) {
@@ -491,7 +549,12 @@ static int findMinCostPath(routingInst *rst, point start, point end, point **pat
     int maxY = (start.y > end.y) ? start.y : end.y;
     int pinDistance = absInt(start.x - end.x) + absInt(start.y - end.y);
     int frameMargin = 8 + 4 * gRrrIteration + pinDistance / 8;
-    if (frameMargin > 96) {
+    if (rst->numNets >= 300000 || ((long long) rst->gx * (long long) rst->gy) >= 500000) {
+        frameMargin = 4 + 3 * gRrrIteration + pinDistance / 16;
+        if (frameMargin > 56) {
+            frameMargin = 56;
+        }
+    } else if (frameMargin > 96) {
         frameMargin = 96;
     }
 
@@ -804,7 +867,12 @@ static int findMinCostPathToRoute(routingInst *rst, point start, route *targetRo
     int maxY = (start.y > routeMaxY) ? start.y : routeMaxY;
     int pinDistance = distanceToBox(start, routeMinX, routeMaxX, routeMinY, routeMaxY);
     int frameMargin = 8 + 4 * gRrrIteration + pinDistance / 8;
-    if (frameMargin > 96) {
+    if (rst->numNets >= 300000 || ((long long) rst->gx * (long long) rst->gy) >= 500000) {
+        frameMargin = 4 + 3 * gRrrIteration + pinDistance / 16;
+        if (frameMargin > 56) {
+            frameMargin = 56;
+        }
+    } else if (frameMargin > 96) {
         frameMargin = 96;
     }
 
@@ -1052,7 +1120,8 @@ static int rerouteNetsByOrdering(routingInst *rst, int *ordering) {
         return 0;
     }
 
-    for (int orderedIndex = 0; orderedIndex < rst->numNets; orderedIndex++) {
+    int rerouteLimit = computeRerouteNetLimit(rst);
+    for (int orderedIndex = 0; orderedIndex < rerouteLimit; orderedIndex++) {
         int netIndex = (ordering == NULL) ? orderedIndex : ordering[orderedIndex];
         net *currNet = &(rst->nets[netIndex]);
 
@@ -1448,9 +1517,6 @@ int readBenchmark(const char *fileName, routingInst *rst) {
 }
 
 int solveRouting(routingInst *rst) {
-    time_t begin;
-    time(&begin);
-
     /*********** TO BE FILLED BY YOU **********/
     if (rst == NULL || rst->nets == NULL || rst->edgeCaps == NULL || rst->edgeUtils == NULL) {
         return 0;
@@ -1487,7 +1553,10 @@ int solveRouting(routingInst *rst) {
         return 0;
     }
 
-    int SECONDS_TO_WAIT = 45; /* 5 * 60; */ // Minimum amount of time was 5 minutes
+    time_t begin;
+    time(&begin);
+
+    int SECONDS_TO_WAIT = computeRrrTimeBudgetSeconds(rst);
     int firstRrrIteration = 1;
     while (firstRrrIteration || !checkTime(&begin, SECONDS_TO_WAIT)) {
         firstRrrIteration = 0;
