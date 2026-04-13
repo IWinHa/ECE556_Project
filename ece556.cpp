@@ -104,7 +104,7 @@ static void recomputeEdgeWeight(routingInst *rst, int index, int updateHistory) 
 
     int overflow = computeOverflowAmount(rst->edgeUtils[index], rst->edgeCaps[index]);
     if (updateHistory && overflow > 0) {
-        rst->edgeHistory[index] += overflow;
+        rst->edgeHistory[index]++;
     }
 
     rst->edgeWeights[index] = (overflow > 0) ? rst->edgeHistory[index] * overflow : 0;
@@ -904,6 +904,30 @@ static int findMinCostPathToRoute(routingInst *rst, point start, route *targetRo
 }
 
 static int appendPathAsSegments(routingInst *rst, route *nroute, int *segmentCapacity, point *path, int pathLength) {
+    // ADDED BY PRATEEK - this code is AI-generated
+    if (rst == NULL || nroute == NULL || segmentCapacity == NULL || path == NULL || pathLength <= 0) {
+        return 0;
+    }
+
+    // If the path is just a single point (meaning the pin is already on the route), 
+    // no segments need to be drawn. Because the rest of the route is made of 
+    // 1-unit segments, this point is guaranteed to be an explicit endpoint!
+    if (pathLength == 1) {
+        return 1;
+    }
+
+    // Instead of compressing straight lines, add a 1-unit segment for EVERY step.
+    // This entirely eliminates T-junctions by making every grid coordinate an endpoint.
+    for (int i = 0; i < pathLength - 1; i++) {
+        if (!appendStraightSegment(rst, nroute, segmentCapacity, path[i], path[i + 1])) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int appendPathAsSegments_OLD(routingInst *rst, route *nroute, int *segmentCapacity, point *path, int pathLength) {
     if (rst == NULL || nroute == NULL || segmentCapacity == NULL || path == NULL || pathLength <= 0) {
         return 0;
     }
@@ -1145,6 +1169,7 @@ static int routeSingleNet(routingInst *rst, net *currNet) {
         return 0;
     }
 
+    freeRoute(&(currNet->nroute));
     currNet->nroute.numSegs = 0;
     currNet->nroute.segments = NULL;
     int segmentCapacity = 0;
@@ -1167,9 +1192,9 @@ static int routeSingleNet(routingInst *rst, net *currNet) {
 
         // If this pin already lies on the current route tree, there is no need
         // to add a backtracking path just to visit it again.
-        if (currNet->nroute.numSegs > 0 && isPointOnRoute(&(currNet->nroute), end)) {
-            continue;
-        }
+        // if (currNet->nroute.numSegs > 0 && isPointOnRoute(&(currNet->nroute), end)) {
+        //    continue;
+        // }
 
         if (!gUseMinCostRouting) {
             if (start.x == end.x || start.y == end.y) {
