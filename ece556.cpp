@@ -264,48 +264,6 @@ static int addStraightSegment(routingInst *rst, segment *seg, point p1, point p2
     return 1;
 }
 
-static int isPointOnSegment(point p, segment *seg) {
-    if (seg == NULL) {
-        return 0;
-    }
-
-    if (seg->p1.x == seg->p2.x) {
-        if (p.x != seg->p1.x) {
-            return 0;
-        }
-
-        int minY = (seg->p1.y < seg->p2.y) ? seg->p1.y : seg->p2.y;
-        int maxY = (seg->p1.y > seg->p2.y) ? seg->p1.y : seg->p2.y;
-        return (p.y >= minY && p.y <= maxY) ? 1 : 0;
-    }
-
-    if (seg->p1.y == seg->p2.y) {
-        if (p.y != seg->p1.y) {
-            return 0;
-        }
-
-        int minX = (seg->p1.x < seg->p2.x) ? seg->p1.x : seg->p2.x;
-        int maxX = (seg->p1.x > seg->p2.x) ? seg->p1.x : seg->p2.x;
-        return (p.x >= minX && p.x <= maxX) ? 1 : 0;
-    }
-
-    return 0;
-}
-
-static int isPointOnRoute(route *nroute, point p) {
-    if (nroute == NULL) {
-        return 0;
-    }
-
-    for (int segIndex = 0; segIndex < nroute->numSegs; segIndex++) {
-        if (isPointOnSegment(p, &(nroute->segments[segIndex]))) {
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
 static int ensureRouteCapacity(route *nroute, int *segmentCapacity, int neededCapacity) {
     if (nroute == NULL || segmentCapacity == NULL) {
         return 0;
@@ -916,36 +874,6 @@ static int appendPathAsSegments(routingInst *rst, route *nroute, int *segmentCap
     }
 
     return 1;
-}
-
-static int appendPathAsSegments_OLD(routingInst *rst, route *nroute, int *segmentCapacity, point *path, int pathLength) {
-    if (rst == NULL || nroute == NULL || segmentCapacity == NULL || path == NULL || pathLength <= 0) {
-        return 0;
-    }
-
-    if (pathLength == 1) {
-        return 1;
-    }
-
-    point segmentStart = path[0];
-    int prevDx = path[1].x - path[0].x;
-    int prevDy = path[1].y - path[0].y;
-
-    for (int pointIndex = 2; pointIndex < pathLength; pointIndex++) {
-        int currDx = path[pointIndex].x - path[pointIndex - 1].x;
-        int currDy = path[pointIndex].y - path[pointIndex - 1].y;
-        if (currDx != prevDx || currDy != prevDy) {
-            if (!appendStraightSegment(rst, nroute, segmentCapacity, segmentStart, path[pointIndex - 1])) {
-                return 0;
-            }
-
-            segmentStart = path[pointIndex - 1];
-            prevDx = currDx;
-            prevDy = currDy;
-        }
-    }
-
-    return appendStraightSegment(rst, nroute, segmentCapacity, segmentStart, path[pathLength - 1]);
 }
 
 static void freeRoute(route *nroute) {
