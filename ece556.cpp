@@ -42,22 +42,13 @@ static int computeOverflowAmount(int utilization, int capacity) {
 }
 
 static int computeRrrTimeBudgetSeconds(routingInst *rst) {
-    if (rst == NULL) {
-        return 45;
-    }
+    (void) rst;
 
-    long long gridPoints = (long long) rst->gx * (long long) rst->gy;
-    int budgetSeconds = 45;
-
-    if (rst->numNets >= 350000 || gridPoints >= 550000) {
-        budgetSeconds = 180;
-    } else if (rst->numNets >= 250000 || gridPoints >= 350000) {
-        budgetSeconds = 120;
-    } else if (rst->numNets >= 150000 || gridPoints >= 150000) {
-        budgetSeconds = 75;
-    }
-
-    return budgetSeconds;
+    // Part 2 expects the router to spend roughly five minutes total so the
+    // RRR stage has time to make progress, while still leaving a small buffer
+    // before a 300-second autograder cutoff. 
+    // We can just replace this function with a constant if it ends up fixing the issue.
+    return 290;
 }
 
 static int computeRerouteNetLimit(routingInst *rst) {
@@ -1547,6 +1538,9 @@ int solveRouting(routingInst *rst) {
         return 0;
     }
 
+    time_t begin;
+    time(&begin);
+
     // Initialize edgeUtils to 0 since we haven't routed anything yet
     for (int i = 0; i < rst->numEdges; i++) {
         rst->edgeUtils[i] = 0;
@@ -1578,13 +1572,8 @@ int solveRouting(routingInst *rst) {
         return 0;
     }
 
-    time_t begin;
-    time(&begin);
-
     int SECONDS_TO_WAIT = computeRrrTimeBudgetSeconds(rst);
-    int firstRrrIteration = 1;
-    while (firstRrrIteration || !checkTime(&begin, SECONDS_TO_WAIT)) {
-        firstRrrIteration = 0;
+    while (bestOverflow > 0 && !checkTime(&begin, SECONDS_TO_WAIT)) {
         gRrrIteration++;
         gUseMinCostRouting = 1;
 
