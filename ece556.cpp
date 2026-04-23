@@ -1058,14 +1058,27 @@ static long long computeTotalOverflow(routingInst *rst) {
     return totalOverflow;
 }
 
-static int rerouteNetsByOrdering(routingInst *rst, int *ordering) {
+static int rerouteNetsByOrdering(routingInst *rst, int *ordering, int orderingCount) {
     if (rst == NULL || rst->nets == NULL) {
         return 0;
     }
 
+    int availableNets = (ordering == NULL) ? rst->numNets : orderingCount;
+    if (availableNets < 0 || availableNets > rst->numNets) {
+        return 0;
+    }
+
     int rerouteLimit = computeRerouteNetLimit(rst);
+    if (rerouteLimit > availableNets) {
+        rerouteLimit = availableNets;
+    }
+
     for (int orderedIndex = 0; orderedIndex < rerouteLimit; orderedIndex++) {
         int netIndex = (ordering == NULL) ? orderedIndex : ordering[orderedIndex];
+        if (netIndex < 0 || netIndex >= rst->numNets) {
+            return 0;
+        }
+
         net *currNet = &(rst->nets[netIndex]);
 
         if (!applyRouteToEdgeUtils(rst, &(currNet->nroute), -1)) {
@@ -1242,10 +1255,36 @@ static int computeNetRouteCost(routingInst *rst, net *currNet) {
     return cost;
 }
 
+static long long computeNetOverflowScore(routingInst *rst, net *currNet) {
+    if (rst == NULL || currNet == NULL) {
+        return 0;
+    }
+
+    long long score = 0;
+    for (int segIndex = 0; segIndex < currNet->nroute.numSegs; segIndex++) {
+        segment *currSeg = &(currNet->nroute.segments[segIndex]);
+        for (int edgeIndex = 0; edgeIndex < currSeg->numEdges; edgeIndex++) {
+            int edgeId = currSeg->edges[edgeIndex];
+            if (edgeId >= 0 && edgeId < rst->numEdges) {
+                long long overflow = computeOverflowAmount(rst->edgeUtils[edgeId], rst->edgeCaps[edgeId]);
+                score += overflow * overflow;
+            }
+        }
+    }
+
+    return score;
+}
+
 typedef struct {
     int netIndex;
     int cost;
 } netOrderingEntry;
+
+typedef struct {
+    int netIndex;
+    long long overflowScore;
+    int routeCost;
+} overflowNetOrderingEntry;
 
 static int compareNetOrderingEntries(const void *leftVoid, const void *rightVoid) {
     const netOrderingEntry *left = (const netOrderingEntry *) leftVoid;
@@ -1255,6 +1294,34 @@ static int compareNetOrderingEntries(const void *leftVoid, const void *rightVoid
         return 1;
     }
     if (left->cost > right->cost) {
+        return -1;
+    }
+
+    if (left->netIndex > right->netIndex) {
+        return 1;
+    }
+    if (left->netIndex < right->netIndex) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int compareOverflowNetOrderingEntries(const void *leftVoid, const void *rightVoid) {
+    const overflowNetOrderingEntry *left = (const overflowNetOrderingEntry *) leftVoid;
+    const overflowNetOrderingEntry *right = (const overflowNetOrderingEntry *) rightVoid;
+
+    if (left->overflowScore < right->overflowScore) {
+        return 1;
+    }
+    if (left->overflowScore > right->overflowScore) {
+        return -1;
+    }
+
+    if (left->routeCost < right->routeCost) {
+        return 1;
+    }
+    if (left->routeCost > right->routeCost) {
         return -1;
     }
 
@@ -1298,6 +1365,60 @@ static int *buildNetOrdering(routingInst *rst) {
 
     free(entries);
     return ordering;
+}
+
+static int buildOverflowNetOrdering(routingInst *rst, int **orderingOut, int *orderingCountOut) {
+    if (rst == NULL || rst->nets == NULL || orderingOut == NULL || orderingCountOut == NULL) {
+        return 0;
+    }
+
+    *orderingOut = NULL;
+    *orderingCountOut = 0;
+    if (rst->numNets <= 0) {
+        return 1;
+    }
+
+    overflowNetOrderingEntry *entries = (overflowNetOrderingEntry *) malloc(
+        rst->numNets * sizeof(overflowNetOrderingEntry)
+    );
+    if (entries == NULL) {
+        return 0;
+    }
+
+    int count = 0;
+    for (int netIndex = 0; netIndex < rst->numNets; netIndex++) {
+        long long overflowScore = computeNetOverflowScore(rst, &(rst->nets[netIndex]));
+        if (overflowScore <= 0) {
+            continue;
+        }
+
+        entries[count].netIndex = netIndex;
+        entries[count].overflowScore = overflowScore;
+        entries[count].routeCost = computeNetRouteCost(rst, &(rst->nets[netIndex]));
+        count++;
+    }
+
+    if (count == 0) {
+        free(entries);
+        return 1;
+    }
+
+    qsort(entries, count, sizeof(overflowNetOrderingEntry), compareOverflowNetOrderingEntries);
+
+    int *ordering = (int *) malloc(count * sizeof(int));
+    if (ordering == NULL) {
+        free(entries);
+        return 0;
+    }
+
+    for (int orderedIndex = 0; orderedIndex < count; orderedIndex++) {
+        ordering[orderedIndex] = entries[orderedIndex].netIndex;
+    }
+
+    free(entries);
+    *orderingOut = ordering;
+    *orderingCountOut = count;
+    return 1;
 }
 
 static int routeNetsByOrdering(routingInst *rst, int *ordering) {
@@ -1501,20 +1622,35 @@ int solveRouting(routingInst *rst) {
     }
 
     int SECONDS_TO_WAIT = computeRrrTimeBudgetSeconds(rst);
+    int staleIterations = 0;
+    const int MAX_STALE_ITERATIONS = 6;
     while (bestOverflow > 0 && !checkTime(&begin, SECONDS_TO_WAIT)) {
         gRrrIteration++;
         gUseMinCostRouting = 1;
 
-        // Apply net ordering from the part 2 slide deck:
-        // cost(n) = sum of W_e over the stored route of n, then route high-cost nets first.
-        int *netOrdering = buildNetOrdering(rst);
-        if (netOrdering == NULL) {
+        // Focus each RRR pass on nets that currently consume overfull edges.
+        // The fallback keeps the original weighted-cost ordering available if
+        // the overflow queue is unexpectedly empty while overflow still exists.
+        int *netOrdering = NULL;
+        int netOrderingCount = 0;
+        if (!buildOverflowNetOrdering(rst, &netOrdering, &netOrderingCount)) {
             freeRouteArray(bestRoutes, rst->numNets);
             clearAllRoutes(rst);
             return 0;
         }
 
-        if (!rerouteNetsByOrdering(rst, netOrdering)) {
+        if (netOrderingCount == 0) {
+            free(netOrdering);
+            netOrdering = buildNetOrdering(rst);
+            netOrderingCount = rst->numNets;
+            if (netOrdering == NULL) {
+                freeRouteArray(bestRoutes, rst->numNets);
+                clearAllRoutes(rst);
+                return 0;
+            }
+        }
+
+        if (!rerouteNetsByOrdering(rst, netOrdering, netOrderingCount)) {
             free(netOrdering);
             freeRouteArray(bestRoutes, rst->numNets);
             return 0;
@@ -1537,6 +1673,12 @@ int solveRouting(routingInst *rst) {
             bestRoutes = newBestRoutes;
             bestOverflow = currOverflow;
             bestWirelength = currWirelength;
+            staleIterations = 0;
+        } else {
+            staleIterations++;
+            if (staleIterations >= MAX_STALE_ITERATIONS) {
+                break;
+            }
         }
     }
 
