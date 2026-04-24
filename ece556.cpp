@@ -1684,6 +1684,244 @@ int closestPoint(routingInst* rst, int netNum, int comparePoint, int startPoint,
     return closestIndex;
 }
 
+int min(int a, int b) {
+    return (a < b) ? a : b;
+}
+
+int max(int a, int b) {
+    return (a > b) ? a : b;
+}
+/**
+ * 
+ * @param p 
+ * @param s 
+ * @return int 
+ */
+point distanceFromSegment(point p, segment* s) {
+    if (s == NULL) return p;
+
+    // This was done previously but just to be safe we do it again here
+    // (Shouldn't take that many extra checks/cycles)
+    point s1, s2;
+    s1.x = min(s->p1.x, s->p2.x);
+    s1.y = min(s->p1.y, s->p2.y);
+    s2.x = max(s->p1.x, s->p2.x);
+    s2.y = max(s->p1.y, s->p2.y);
+
+    // Return the point on this segment that is closest to this point
+    if (s1.x == s2.x) {
+        // This is a vertical segment
+
+        // Check to see if the point is already on the segment
+        if (s1.x == p.x && s1.y <= p.y && s2.y >= p.y) return p;
+
+        // Check to see if the point's y-value is contained in the segment
+        // If it is, return the point on this line
+        if (s1.y <= p.y && s2.y >= p.y) return {s1.x, p.y};
+
+        // Otherwise, return the bottommost point if p.y < s1.y or the topmost if p.y > s2.y
+        return (p.y > s2.y) ? s2 : s1;
+    }
+
+    if (s1.y == s2.y) {
+        // This is a vertical segment
+
+        // Check to see if the point is already on the segment
+        if (s1.y == p.y && s1.x <= p.x && s2.x >= p.x) return p;
+
+        // Check to see if the point's x-value is contained in the segment
+        // If it is, return the point on this line
+        if (s1.x <= p.x && s2.x >= p.x) return {p.x, s1.y};
+
+        // Otherwise, return the rightmost point if p.x < s1.x or the leftmost if p.x > s2.x
+        return (p.x > s2.x) ? s2 : s1;
+    }
+
+    else return {-1, -1}; // Should never return
+}
+
+bool inArray(int toCheck, int* theList, int listSize) {
+    // Checks theList to see if the integer is in the array or not
+    // Similar to a contains() method in Java or Python
+    for (int i = 0; i < listSize; i++) {
+        if (toCheck == theList[i]) return true;
+    }
+    return false;
+}
+
+reorderSegment createReorderSegment(point p1, point p2) {
+    reorderSegment theSegment;
+
+    if (p1.x == p2.x) {
+        // Straight vertical line
+        theSegment.verticalL1.p1 = p1;
+        theSegment.verticalL1.p2 = p2;
+        theSegment.v1Valid = true;
+
+
+        theSegment.h1Valid = false;
+        theSegment.h2Valid = false;
+        theSegment.v2Valid = false;
+        return theSegment;
+    }
+
+    if (p1.y == p2.y) {
+        // Straight horizontal line
+        theSegment.horizontalL1.p1 = p1;
+        theSegment.horizontalL1.p2 = p2;
+        theSegment.horizontalL1.numEdges = 0;
+        theSegment.h1Valid = true;
+
+
+        theSegment.v1Valid = false;
+        theSegment.h2Valid = false;
+        theSegment.v2Valid = false;
+        return theSegment;
+    }
+
+    // If we made it here, we will have an L shape
+    // Organize so that s1 always has the lowest x value between p1 and p2
+    // Note that p1.x and p2.x cannot equal each other since that was an if statement above
+    point s1, s2;
+    s1 = (p1.x < p2.x) ? p1 : p2;
+    s2 = (p1.x < p2.x) ? p2 : p1;
+
+    // Make both Ls: one that moves to the right then up/down
+    theSegment.horizontalL1.p1 = s1;
+    theSegment.horizontalL1.p2 = {s2.x, s1.y};
+    theSegment.h1Valid = true;
+
+    theSegment.verticalL1.p1 = {s2.x, s1.y};
+    theSegment.verticalL1.p2 = s2;
+    theSegment.v1Valid = true;
+
+    // This L moves up/down then to the right
+    theSegment.verticalL2.p1 = s1;
+    theSegment.verticalL2.p2 = {s1.x, s2.y};
+    theSegment.v2Valid = true;
+
+    theSegment.horizontalL2.p1 = {s1.x, s2.y};
+    theSegment.horizontalL2.p2 = s2;
+    theSegment.h2Valid = true;
+
+    return theSegment;
+}
+
+void newReorderPins(routingInst* rst) {
+    // Each net is done separately
+    for (int numNet = 0; numNet < rst->numNets; numNet++) {
+
+        // Find the two closest points to each other
+        // Start with the 0 index and whatever is closest to that
+        if (rst->nets[numNet].numPins <= 2) continue;
+
+        int closestIndex = closestPoint(rst, numNet, 0, 1, rst->nets[numNet].numPins);
+
+        // This will hold all of the indices we have explored in order
+        // We need this so we do not repeat points
+        int* closestPoints = (int*) malloc(rst->nets[numNet].numPins);
+
+        // Initially we will have the very first point and whichever was closest to that
+        closestPoints[0] = 0;
+        closestPoints[1] = closestIndex;
+
+        int closestDistance = manhattanDistance(rst->nets[numNet].pins[0], rst->nets[numNet].pins[closestIndex]);
+
+        // Iterate through the remaining point and see if we can find a closer pair
+        // If we can, update closestPoints and closestDistance
+        for (int i = 1; i < rst->nets[numNet].numPins; i++) {
+            int temp = closestPoint(rst, numNet, i, i+1, rst->nets[numNet].numPins);
+            if (manhattanDistance(rst->nets[numNet].pins[i], rst->nets[numNet].pins[temp]) < closestDistance) {
+                closestPoints[0] = i;
+                closestPoints[1] = temp;
+                closestDistance = manhattanDistance(rst->nets[numNet].pins[i], rst->nets[numNet].pins[temp]);
+            } 
+        }
+
+        // Instantiate a list of segments and add both L routes for the two points
+        // This assumes two pins cannot be on the same square which I think is a fine assumptio nto have
+        std::vector<reorderSegment> segmentList;
+        segmentList.push_back(createReorderSegment(rst->nets[numNet].pins[closestPoints[0]], 
+                                                rst->nets[numNet].pins[closestPoints[1]]));
+    
+        // This is going to hold the new rst->nets[numNet].pins[] so we don't have to modify the original
+        // The downside is we need to watch out for free() and malloc() as needed
+        point* newNet = (point*) malloc(rst->nets[numNet].numPins * sizeof(point));
+        newNet[0] = rst->nets[numNet].pins[closestPoints[0]];
+        newNet[1] = rst->nets[numNet].pins[closestPoints[1]];
+        int currentNewNetSize = 2;
+
+        // Continue doing this until we run out of points
+        while (currentNewNetSize != rst->nets[numNet].numPins) {
+
+            // Find the point on the L path that is closest to this point
+            int closestSegmentIndex = -1; // Holds which L reorderSegment we will use
+            int closestPointIndex = -1; // Holds which point that we haven't fitted is the closest
+            int closestLIndex = -1; // Holds the index of the particular horizontal/vertical segment we are using from reorderSegment
+            point pointClosest; // Holds the closest point within the segment
+            int pointClosestDistance = -1; // Holds smallest distance between pointClosest and the point we are looking at
+
+            for (int pointIndex = 0; pointIndex < rst->nets[numNet].numPins; pointIndex++) {
+
+                if (inArray(pointIndex, closestPoints, currentNewNetSize)) continue; // Do not repeat points
+
+                // Go through the entire segmentList and see if we can find a closer pairing
+                // If we can, update accordingly
+                for (int i = 0; i < segmentList.size(); i++) {
+                    reorderSegment segmentToCheck = segmentList.at(i);
+
+                    // Use this to check faster than copying the code four times
+                    segment toCheck[4] = {segmentToCheck.horizontalL1, segmentToCheck.verticalL1, segmentToCheck.horizontalL2, segmentToCheck.verticalL2};
+                    bool validCheck[4] = {segmentToCheck.h1Valid, segmentToCheck.v1Valid, segmentToCheck.h2Valid, segmentToCheck.v2Valid};
+                    for (int j = 0; j < 4; j++) {
+                        if (!validCheck[j]) continue; // Don't bother checking invalid segments
+                        point closestPoint = distanceFromSegment(rst->nets[numNet].pins[pointIndex], &toCheck[j]);
+                        int distanceFromPoint = manhattanDistance(closestPoint, rst->nets[numNet].pins[pointIndex]);
+                        if (closestSegmentIndex == -1 || distanceFromPoint < pointClosestDistance) {
+                            // New shortest candidate - update all values accordingly
+                            closestSegmentIndex = i;
+                            closestPointIndex = pointIndex;
+                            closestLIndex = j;
+                            pointClosest = closestPoint;
+                            pointClosestDistance = distanceFromPoint;
+                        }
+                    }
+                }
+            }
+
+
+            // Once we make it here, we have the closest segment and closest point - update the L segments and the lists
+            reorderSegment* segmentToUse = &(segmentList.at(closestSegmentIndex));
+            if (closestLIndex == 0 || closestLIndex == 1) {
+                // This was the "1st L" - remove the second L so it cannot be checked later
+                segmentToUse->h2Valid = false;
+                segmentToUse->v2Valid = false;
+            }
+            else {
+                // This was the "2nd L" - remove the first L
+                segmentToUse->h1Valid = false;
+                segmentToUse->v1Valid = false;
+            }
+            if (pointClosest.x != rst->nets[numNet].pins[closestPointIndex].x || 
+                pointClosest.y != rst->nets[numNet].pins[closestPointIndex].y) {
+                // Only add a new segment if the closestPoint and the pin are NOT the same
+                // (if they were, the segment would be size 0)
+                segmentList.push_back(createReorderSegment(pointClosest, rst->nets[numNet].pins[closestPointIndex]));
+            }
+
+            // Update newNet and closestPoints
+            newNet[currentNewNetSize] = rst->nets[numNet].pins[closestPointIndex];
+            closestPoints[currentNewNetSize] = closestPointIndex;
+            currentNewNetSize++;
+        }
+
+        // We are done - free old list and use the new list we created.
+        free(rst->nets[numNet].pins);
+        free(closestPoints);
+        rst->nets[numNet].pins = newNet;
+    }
+}
+
 /**
  * Reorders each pin according to which next pin is the closest Manhattan distance away.
  * TODO: Rectilinear uses MBB to compare.

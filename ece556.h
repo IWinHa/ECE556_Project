@@ -28,6 +28,18 @@ typedef struct {
 
 } segment;
 
+typedef struct {
+    segment horizontalL1;
+    segment verticalL1;
+    segment horizontalL2;
+    segment verticalL2;
+
+    bool h1Valid;
+    bool v1Valid;
+    bool h2Valid;
+    bool v2Valid;
+} reorderSegment;
+
 /**
  * A structure to represent a route
  */
