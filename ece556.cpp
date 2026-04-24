@@ -26,6 +26,8 @@ static void updateRouteEdgeWeights(routingInst *rst, route *nroute, int updateHi
 static int findMinCostPathToRoute(routingInst *rst, point start, route *targetRoute, point **pathOut, int *pathLengthOut);
 static int computeRrrTimeBudgetSeconds(routingInst *rst);
 static int computeRerouteNetLimit(routingInst *rst);
+static long long computeSelectiveOverflowThreshold(routingInst *rst);
+static int shouldUseSelectiveOverflowOrdering(routingInst *rst, long long totalOverflow);
 
 void setRoutingMode(int usePinOrdering, int useNetOrderingAndRrr) {
     gUsePinOrdering = usePinOrdering ? 1 : 0;
@@ -84,6 +86,43 @@ static int computeRerouteNetLimit(routingInst *rst) {
     }
 
     return rerouteLimit;
+}
+
+static long long computeSelectiveOverflowThreshold(routingInst *rst) {
+    if (rst == NULL || rst->numNets <= 0) {
+        return 0;
+    }
+
+    long long gridPoints = (long long) rst->gx * (long long) rst->gy;
+    long long threshold;
+
+    if (rst->numNets >= 300000 || gridPoints >= 500000) {
+        threshold = rst->numNets / 20;
+        if (threshold < 5000) {
+            threshold = 5000;
+        }
+        if (threshold > 25000) {
+            threshold = 25000;
+        }
+    } else {
+        threshold = rst->numNets;
+        if (threshold < 50000) {
+            threshold = 50000;
+        }
+        if (threshold > 200000) {
+            threshold = 200000;
+        }
+    }
+
+    return threshold;
+}
+
+static int shouldUseSelectiveOverflowOrdering(routingInst *rst, long long totalOverflow) {
+    if (rst == NULL || totalOverflow <= 0) {
+        return 0;
+    }
+
+    return totalOverflow <= computeSelectiveOverflowThreshold(rst);
 }
 
 static void recomputeEdgeWeight(routingInst *rst, int index, int updateHistory) {
@@ -1626,19 +1665,26 @@ int solveRouting(routingInst *rst) {
         gRrrIteration++;
         gUseMinCostRouting = 1;
 
-        // Focus each RRR pass on nets that currently consume overfull edges.
-        // The fallback keeps the original weighted-cost ordering available if
-        // the overflow queue is unexpectedly empty while overflow still exists.
-        int *netOrdering = NULL;
-        int netOrderingCount = 0;
-        if (!buildOverflowNetOrdering(rst, &netOrdering, &netOrderingCount)) {
+        long long routingOverflow = computeTotalOverflow(rst);
+        if (routingOverflow < 0) {
             freeRouteArray(bestRoutes, rst->numNets);
             clearAllRoutes(rst);
             return 0;
         }
 
+        // Use full weighted-cost RRR while overflow is broad, then switch to
+        // selective overflow cleanup once the remaining congestion is sparse.
+        int *netOrdering = NULL;
+        int netOrderingCount = 0;
+        if (shouldUseSelectiveOverflowOrdering(rst, routingOverflow)) {
+            if (!buildOverflowNetOrdering(rst, &netOrdering, &netOrderingCount)) {
+                freeRouteArray(bestRoutes, rst->numNets);
+                clearAllRoutes(rst);
+                return 0;
+            }
+        }
+
         if (netOrderingCount == 0) {
-            free(netOrdering);
             netOrdering = buildNetOrdering(rst);
             netOrderingCount = rst->numNets;
             if (netOrdering == NULL) {
