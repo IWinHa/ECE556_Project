@@ -44,11 +44,9 @@ static int computeOverflowAmount(int utilization, int capacity) {
 static int computeRrrTimeBudgetSeconds(routingInst *rst) {
     (void) rst;
 
-    // Part 2 expects the router to spend roughly five minutes total so the
-    // RRR stage has time to make progress, while still leaving a small buffer
-    // before a 300-second autograder cutoff. 
-    // We can just replace this function with a constant if it ends up fixing the issue.
-    return 290;
+    // Part 3 defines a five-minute minimum so the RRR stage is applied before
+    // judging the final quality metric.
+    return 300;
 }
 
 static int computeRerouteNetLimit(routingInst *rst) {
@@ -1624,7 +1622,7 @@ int solveRouting(routingInst *rst) {
     int SECONDS_TO_WAIT = computeRrrTimeBudgetSeconds(rst);
     int staleIterations = 0;
     const int MAX_STALE_ITERATIONS = 6;
-    while (bestOverflow > 0 && !checkTime(&begin, SECONDS_TO_WAIT)) {
+    while (bestOverflow > 0 && (gRrrIteration == 0 || !checkTime(&begin, SECONDS_TO_WAIT))) {
         gRrrIteration++;
         gUseMinCostRouting = 1;
 
@@ -1676,7 +1674,7 @@ int solveRouting(routingInst *rst) {
             staleIterations = 0;
         } else {
             staleIterations++;
-            if (staleIterations >= MAX_STALE_ITERATIONS) {
+            if (staleIterations >= MAX_STALE_ITERATIONS && checkTime(&begin, SECONDS_TO_WAIT)) {
                 break;
             }
         }
