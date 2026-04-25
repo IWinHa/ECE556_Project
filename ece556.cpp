@@ -1800,6 +1800,85 @@ reorderSegment createReorderSegment(point p1, point p2) {
     return theSegment;
 }
 
+reorderSegment eliminateL(reorderBestSegment* bestSegmentList, int bestSegmentListSize, point* netPoints, 
+                                    reorderSegment newSegment, int segmentNum, reorderBetterL l1, reorderBetterL l2) {
+    segment allSegments[4] = {newSegment.horizontalL1, newSegment.verticalL1, newSegment.horizontalL2, newSegment.verticalL2};
+    bool allValid[4] = {newSegment.h1Valid, newSegment.v1Valid, newSegment.h2Valid, newSegment.v2Valid};
+
+    l1.numBetterIndices = 0;
+    l1.totalDistanceSaved = 0;
+    l2.numBetterIndices = 0;
+    l2.totalDistanceSaved = 0;
+
+    for (int i = 0; i < bestSegmentListSize; i++) {
+        if (bestSegmentList[i].seen) continue;
+        point currentPoint = netPoints[i];
+        for (int j = 0; j < 4; j++) {
+            if (!allValid[j]) continue;
+            point currentClosest = distanceFromSegment(currentPoint, &allSegments[j]);
+            int currentDistance = manhattanDistance(currentPoint, currentClosest);
+
+            // Should closestPoint be INT_MAX, using long long allows the operation to not overflow
+            // Otherwise, just two INT_MAXs could be enough to overflow
+            long long currentImprovement = bestSegmentList[i].closestPointToLDistance - currentDistance;
+
+            // Either this is an improvement, or this is the first go
+            if (currentImprovement > 0) {
+                if (j == 0 || j == 1) {
+                    // First L
+                    l1.listOfBetterIndex[l1.numBetterIndices] = i;
+                    l1.totalDistanceSaved += currentImprovement;
+                    l1.listOfBetterPoint[l1.numBetterIndices] = currentClosest;
+                    l1.listOfBetterDistance[l1.numBetterIndices] = currentDistance;
+                    l1.numBetterIndices++;
+                }
+                else {
+                    // Second L
+                    l2.listOfBetterIndex[l2.numBetterIndices] = i;
+                    l2.totalDistanceSaved += currentImprovement;
+                    l2.listOfBetterPoint[l2.numBetterIndices] = currentClosest;
+                    l2.listOfBetterDistance[l2.numBetterIndices] = currentDistance;
+                    l2.numBetterIndices++;
+                }
+            }
+        }
+    }
+
+    // If decided later we can change the eval criteria to number of pins that improve.
+    // Change second if statement below to if (l1.numBetterIndices >= l2.numBetterIndices) 
+
+    // Checks which version has the best total amount of sharing and uses that
+    if (l1.numBetterIndices == 0 && l2.numBetterIndices == 0) {
+        // This segment is useless - don't even bother
+        newSegment.h1Valid = false;
+        newSegment.h2Valid = false;
+        newSegment.v1Valid = false;
+        newSegment.v2Valid = false;
+        return newSegment;
+    }
+    if (l1.totalDistanceSaved >= l2.totalDistanceSaved) {
+        newSegment.h2Valid = false;
+        newSegment.v2Valid = false;
+        for (int i = 0; i < l1.numBetterIndices; i++) {
+            bestSegmentList[l1.listOfBetterIndex[i]].bestLIndex = segmentNum;
+            bestSegmentList[l1.listOfBetterIndex[i]].closestPointToL = l1.listOfBetterPoint[i];
+            bestSegmentList[l1.listOfBetterIndex[i]].closestPointToLDistance = l1.listOfBetterDistance[i];
+        }
+        return newSegment;
+    }
+    else {
+        newSegment.h1Valid = false;
+        newSegment.v1Valid = false;
+        for (int i = 0; i < l2.numBetterIndices; i++) {
+            bestSegmentList[l2.listOfBetterIndex[i]].bestLIndex = segmentNum;
+            bestSegmentList[l2.listOfBetterIndex[i]].closestPointToL = l2.listOfBetterPoint[i];
+            bestSegmentList[l2.listOfBetterIndex[i]].closestPointToLDistance = l2.listOfBetterDistance[i];
+        }
+        return newSegment;
+    }
+
+}
+
 void newReorderPins(routingInst* rst) {
     // Each net is done separately
     for (int numNet = 0; numNet < rst->numNets; numNet++) {
@@ -1829,12 +1908,6 @@ void newReorderPins(routingInst* rst) {
                 closestDistance = manhattanDistance(rst->nets[numNet].pins[i], rst->nets[numNet].pins[temp]);
             } 
         }
-
-        // Instantiate a list of segments and add both L routes for the two points
-        // This assumes two pins cannot be on the same square which I think is a fine assumptio nto have
-        std::vector<reorderSegment> segmentList(2 * rst->nets[numNet].numPins);
-        segmentList.push_back(createReorderSegment(rst->nets[numNet].pins[closestPoints[0]], 
-                                                rst->nets[numNet].pins[closestPoints[1]]));
     
         // This is going to hold the new rst->nets[numNet].pins[] so we don't have to modify the original
         // The downside is we need to watch out for free() and malloc() as needed
@@ -1843,11 +1916,32 @@ void newReorderPins(routingInst* rst) {
         newNet[1] = rst->nets[numNet].pins[closestPoints[1]];
         int currentNewNetSize = 2;
 
-        // Check which points we have already visited
-        bool* seenPoints = (bool*) calloc(rst->nets[numNet].numPins, sizeof(bool));
+        reorderBestSegment* bestSegmentList = (reorderBestSegment*) malloc(rst->nets[numNet].numPins * sizeof(reorderBestSegment));
+        for (int i = 0; i < rst->nets[numNet].numPins; i++) {
+            bestSegmentList[i].seen = false;
+            bestSegmentList[i].bestLIndex = 0;
+            bestSegmentList[i].closestPointToLDistance = INT_MAX;
+        }
 
-        seenPoints[closestPoints[0]] = true;
-        seenPoints[closestPoints[1]] = true;
+        // Instantiate a list of segments and add both L routes for the two points
+        // This assumes two pins cannot be on the same square which I think is a fine assumption nto have
+        std::vector<reorderSegment> segmentList(2 * rst->nets[numNet].numPins);
+
+        reorderBetterL* helperReorderL = (reorderBetterL*) malloc(2 * sizeof(reorderBetterL));
+        for (int i = 0; i < 2; i++) {
+            helperReorderL[i].listOfBetterDistance = (int*) malloc(rst->nets[numNet].numPins * sizeof(int));
+            helperReorderL[i].listOfBetterIndex = (int*) malloc(rst->nets[numNet].numPins * sizeof(int));
+            helperReorderL[i].listOfBetterPoint = (point*) malloc(rst->nets[numNet].numPins * sizeof(point));
+        }
+
+        reorderSegment firstSegment = eliminateL(bestSegmentList, rst->nets[numNet].numPins, rst->nets[numNet].pins, 
+            createReorderSegment(rst->nets[numNet].pins[closestPoints[0]], 
+                    rst->nets[numNet].pins[closestPoints[1]]), 0, helperReorderL[0], helperReorderL[1]);
+        
+        segmentList.push_back(firstSegment);
+
+        bestSegmentList[closestPoints[0]].seen = true;
+        bestSegmentList[closestPoints[1]].seen = true;
 
         // Continue doing this until we run out of points
         while (currentNewNetSize != rst->nets[numNet].numPins) {
@@ -1859,63 +1953,48 @@ void newReorderPins(routingInst* rst) {
             point pointClosest; // Holds the closest point within the segment
             int pointClosestDistance = -1; // Holds smallest distance between pointClosest and the point we are looking at
 
+            reorderBestSegment currentBest;
+
             for (int pointIndex = 0; pointIndex < rst->nets[numNet].numPins; pointIndex++) {
 
-                if (seenPoints[pointIndex]) continue; // Do not repeat points
+                if (bestSegmentList[pointIndex].seen) continue; // Do not repeat points
 
-                // Go through the entire segmentList and see if we can find a closer pairing
-                // If we can, update accordingly
-                for (int i = 0; i < segmentList.size(); i++) {
-                    reorderSegment segmentToCheck = segmentList.at(i);
-
-                    // Use this to check faster than copying the code four times
-                    segment toCheck[4] = {segmentToCheck.horizontalL1, segmentToCheck.verticalL1, segmentToCheck.horizontalL2, segmentToCheck.verticalL2};
-                    bool validCheck[4] = {segmentToCheck.h1Valid, segmentToCheck.v1Valid, segmentToCheck.h2Valid, segmentToCheck.v2Valid};
-                    for (int j = 0; j < 4; j++) {
-                        if (!validCheck[j]) continue; // Don't bother checking invalid segments
-                        point closestPoint = distanceFromSegment(rst->nets[numNet].pins[pointIndex], &toCheck[j]);
-                        int distanceFromPoint = manhattanDistance(closestPoint, rst->nets[numNet].pins[pointIndex]);
-                        if (closestSegmentIndex == -1 || distanceFromPoint < pointClosestDistance) {
-                            // New shortest candidate - update all values accordingly
-                            closestSegmentIndex = i;
-                            closestPointIndex = pointIndex;
-                            closestLIndex = j;
-                            pointClosest = closestPoint;
-                            pointClosestDistance = distanceFromPoint;
-                        }
-                    }
+                if (pointClosestDistance == -1 || bestSegmentList[pointIndex].closestPointToLDistance < pointClosestDistance) {
+                    closestPointIndex = pointIndex;
+                    closestLIndex = bestSegmentList[pointIndex].bestLIndex;
+                    pointClosest = bestSegmentList[pointIndex].closestPointToL;
+                    pointClosestDistance = bestSegmentList[pointIndex].closestPointToLDistance;
                 }
             }
 
 
             // Once we make it here, we have the closest segment and closest point - update the L segments and the lists
-            reorderSegment* segmentToUse = &(segmentList.at(closestSegmentIndex));
-            if (closestLIndex == 0 || closestLIndex == 1) {
-                // This was the "1st L" - remove the second L so it cannot be checked later
-                segmentToUse->h2Valid = false;
-                segmentToUse->v2Valid = false;
-            }
-            else {
-                // This was the "2nd L" - remove the first L
-                segmentToUse->h1Valid = false;
-                segmentToUse->v1Valid = false;
-            }
             if (pointClosest.x != rst->nets[numNet].pins[closestPointIndex].x || 
                 pointClosest.y != rst->nets[numNet].pins[closestPointIndex].y) {
                 // Only add a new segment if the closestPoint and the pin are NOT the same
                 // (if they were, the segment would be size 0)
-                segmentList.push_back(createReorderSegment(pointClosest, rst->nets[numNet].pins[closestPointIndex]));
+
+                reorderSegment temp = eliminateL(bestSegmentList, rst->nets[numNet].numPins, rst->nets[numNet].pins, 
+                                                createReorderSegment(pointClosest, 
+                                                        rst->nets[numNet].pins[closestPointIndex]), segmentList.size(), helperReorderL[0], helperReorderL[1]);
+                if (temp.h1Valid || temp.h2Valid || temp.v1Valid || temp.v2Valid) segmentList.push_back(temp);
             }
 
             // Update newNet and closestPoints
             newNet[currentNewNetSize] = rst->nets[numNet].pins[closestPointIndex];
-            seenPoints[closestPointIndex] = true;
+            bestSegmentList[closestPointIndex].seen = true;
             currentNewNetSize++;
         }
 
         // We are done - free old list and use the new list we created.
         free(rst->nets[numNet].pins);
-        free(seenPoints);
+        for (int i = 0; i < 2; i++) {
+            free(helperReorderL[i].listOfBetterDistance);
+            free(helperReorderL[i].listOfBetterIndex);
+            free(helperReorderL[i].listOfBetterPoint);
+        }
+        free(helperReorderL);
+        free(bestSegmentList);
         rst->nets[numNet].pins = newNet;
     }
 }

@@ -40,6 +40,21 @@ typedef struct {
     bool v2Valid;
 } reorderSegment;
 
+typedef struct {
+    bool seen;
+    int bestLIndex;
+    point closestPointToL;
+    int closestPointToLDistance;
+} reorderBestSegment;
+
+typedef struct {
+    int numBetterIndices;
+    int* listOfBetterIndex;
+    point* listOfBetterPoint;
+    int* listOfBetterDistance;
+    long long totalDistanceSaved;
+} reorderBetterL;
+
 /**
  * A structure to represent a route
  */
