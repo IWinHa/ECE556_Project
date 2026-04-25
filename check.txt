@@ -1,0 +1,84 @@
+Parsing benchmark....
+Reading solution...
+All nets connected!
+total wirelength is 5176643
+total overflow is 1262989
+
+DONE!
+Parsing benchmark....
+Reading solution...
+All nets connected!
+total wirelength is 4568649
+total overflow is 172600
+
+DONE!
+Parsing benchmark....
+Reading solution...
+All nets connected!
+total wirelength is 3881857
+total overflow is 529900
+
+DONE!
+Parsing benchmark....
+Reading solution...
+All nets connected!
+total wirelength is 4392011
+total overflow is 147195
+
+DONE!
+Parsing benchmark....
+Reading solution...
+All nets connected!
+total wirelength is 4978847
+total overflow is 216881
+
+DONE!
+Parsing benchmark....
+Reading solution...
+All nets connected!
+total wirelength is 3417482
+total overflow is 623
+
+DONE!
+Parsing benchmark....
+Reading solution...
+All nets connected!
+total wirelength is 3704007
+total overflow is 78839
+
+DONE!
+Parsing benchmark....
+Reading solution...
+All nets connected!
+total wirelength is 3274212
+total overflow is 745
+
+DONE!
+Parsing benchmark....
+Reading solution...
+All nets connected!
+total wirelength is 14135345
+total overflow is 2161636
+
+DONE!
+Parsing benchmark....
+Reading solution...
+All nets connected!
+total wirelength is 11386364
+total overflow is 95174
+
+DONE!
+Parsing benchmark....
+Reading solution...
+All nets connected!
+total wirelength is 10399893
+total overflow is 790645
+
+DONE!
+Parsing benchmark....
+Reading solution...
+All nets connected!
+total wirelength is 10666253
+total overflow is 84844
+
+DONE!

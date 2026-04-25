@@ -10,6 +10,7 @@
 #include <vector>
 
 void reorderPins(routingInst* rst);
+void newReorderPins(routingInst* rst);
 void updateEdgeWeights(routingInst* rst, int index);
 int checkTime(time_t* begin, int NUM_SECONDS);
 
@@ -1476,7 +1477,8 @@ int solveRouting(routingInst *rst) {
 
 
     if (gUsePinOrdering) {
-        reorderPins(rst);
+        printf("Reordering...\n");
+        newReorderPins(rst);
     }
 
     gRrrIteration = 0;
@@ -1819,7 +1821,7 @@ void newReorderPins(routingInst* rst) {
 
         // This will hold all of the indices we have explored in order
         // We need this so we do not repeat points
-        int* closestPoints = (int*) malloc(rst->nets[numNet].numPins);
+        int* closestPoints = (int*) malloc(rst->nets[numNet].numPins * sizeof(int));
 
         // Initially we will have the very first point and whichever was closest to that
         closestPoints[0] = 0;
@@ -1829,7 +1831,7 @@ void newReorderPins(routingInst* rst) {
 
         // Iterate through the remaining point and see if we can find a closer pair
         // If we can, update closestPoints and closestDistance
-        for (int i = 1; i < rst->nets[numNet].numPins; i++) {
+        for (int i = 1; i < rst->nets[numNet].numPins - 1; i++) {
             int temp = closestPoint(rst, numNet, i, i+1, rst->nets[numNet].numPins);
             if (manhattanDistance(rst->nets[numNet].pins[i], rst->nets[numNet].pins[temp]) < closestDistance) {
                 closestPoints[0] = i;
