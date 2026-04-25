@@ -1347,7 +1347,7 @@ int readBenchmark(const char *fileName, routingInst *rst) {
     char* spaceDelimiter = strtok(readFileBuffer, " \t\n");
 
     // spaceDelimiter should just be "grid" at this point
-    if (strcmp(spaceDelimiter, "grid")) printf("spaceDelimiter was \"%s\"\n", spaceDelimiter);
+    // if (strcmp(spaceDelimiter, "grid")) printf("spaceDelimiter was \"%s\"\n", spaceDelimiter);
 
     // Extract <gx> and <gy>
     rst->gx = strtol(strtok(NULL, " \t\n"), NULL, 10);
@@ -1359,7 +1359,7 @@ int readBenchmark(const char *fileName, routingInst *rst) {
     spaceDelimiter = strtok(readFileBuffer, " \t\n");
 
     // spaceDelimiter should just be "capacity" at this point
-    if (strcmp(spaceDelimiter, "capacity")) printf("spaceDelimiter was \"%s\"\n", spaceDelimiter);
+    // if (strcmp(spaceDelimiter, "capacity")) printf("spaceDelimiter was \"%s\"\n", spaceDelimiter);
 
     rst->cap = strtol(strtok(NULL, " \t\n"), NULL, 10);
     
@@ -1369,11 +1369,11 @@ int readBenchmark(const char *fileName, routingInst *rst) {
     spaceDelimiter = strtok(readFileBuffer, " \t\n");
 
     // spaceDelimiter should first be "num" at this point
-    if (strcmp(spaceDelimiter, "num")) printf("spaceDelimiter was \"%s\"\n", spaceDelimiter);
+    // if (strcmp(spaceDelimiter, "num")) printf("spaceDelimiter was \"%s\"\n", spaceDelimiter);
 
     // spaceDelimiter should now be "net"
     spaceDelimiter = strtok(NULL, " \t\n");
-    if (strcmp(spaceDelimiter, "net")) printf("spaceDelimiter was \"%s\"\n", spaceDelimiter);
+    // if (strcmp(spaceDelimiter, "net")) printf("spaceDelimiter was \"%s\"\n", spaceDelimiter);
 
     rst->numNets = strtol(strtok(NULL, " \t\n"), NULL, 10);
 
@@ -1477,7 +1477,7 @@ int solveRouting(routingInst *rst) {
 
 
     if (gUsePinOrdering) {
-        printf("Reordering...\n");
+        // printf("Reordering...\n");
         newReorderPins(rst);
     }
 
@@ -1925,7 +1925,8 @@ void newReorderPins(routingInst* rst) {
 
         // Instantiate a list of segments and add both L routes for the two points
         // This assumes two pins cannot be on the same square which I think is a fine assumption nto have
-        std::vector<reorderSegment> segmentList(2 * rst->nets[numNet].numPins);
+        std::vector<reorderSegment> segmentList;
+        segmentList.reserve(2 * rst->nets[numNet].numPins);
 
         reorderBetterL* helperReorderL = (reorderBetterL*) malloc(2 * sizeof(reorderBetterL));
         for (int i = 0; i < 2; i++) {

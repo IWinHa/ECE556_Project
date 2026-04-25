@@ -1,3 +1,4 @@
 **/*.o
-run_everything.sh
 out_*
+check.txt
+time.txt
