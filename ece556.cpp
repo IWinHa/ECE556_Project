@@ -1742,15 +1742,6 @@ point distanceFromSegment(point p, segment* s) {
     else return {-1, -1}; // Should never return
 }
 
-bool inArray(int toCheck, int* theList, int listSize) {
-    // Checks theList to see if the integer is in the array or not
-    // Similar to a contains() method in Java or Python
-    for (int i = 0; i < listSize; i++) {
-        if (toCheck == theList[i]) return true;
-    }
-    return false;
-}
-
 reorderSegment createReorderSegment(point p1, point p2) {
     reorderSegment theSegment;
 
@@ -1819,9 +1810,8 @@ void newReorderPins(routingInst* rst) {
 
         int closestIndex = closestPoint(rst, numNet, 0, 1, rst->nets[numNet].numPins);
 
-        // This will hold all of the indices we have explored in order
-        // We need this so we do not repeat points
-        int* closestPoints = (int*) malloc(rst->nets[numNet].numPins * sizeof(int));
+        // This holds the top two closest points
+        int closestPoints[2];
 
         // Initially we will have the very first point and whichever was closest to that
         closestPoints[0] = 0;
@@ -1842,7 +1832,7 @@ void newReorderPins(routingInst* rst) {
 
         // Instantiate a list of segments and add both L routes for the two points
         // This assumes two pins cannot be on the same square which I think is a fine assumptio nto have
-        std::vector<reorderSegment> segmentList;
+        std::vector<reorderSegment> segmentList(2 * rst->nets[numNet].numPins);
         segmentList.push_back(createReorderSegment(rst->nets[numNet].pins[closestPoints[0]], 
                                                 rst->nets[numNet].pins[closestPoints[1]]));
     
@@ -1852,6 +1842,12 @@ void newReorderPins(routingInst* rst) {
         newNet[0] = rst->nets[numNet].pins[closestPoints[0]];
         newNet[1] = rst->nets[numNet].pins[closestPoints[1]];
         int currentNewNetSize = 2;
+
+        // Check which points we have already visited
+        bool* seenPoints = (bool*) calloc(rst->nets[numNet].numPins, sizeof(bool));
+
+        seenPoints[closestPoints[0]] = true;
+        seenPoints[closestPoints[1]] = true;
 
         // Continue doing this until we run out of points
         while (currentNewNetSize != rst->nets[numNet].numPins) {
@@ -1865,7 +1861,7 @@ void newReorderPins(routingInst* rst) {
 
             for (int pointIndex = 0; pointIndex < rst->nets[numNet].numPins; pointIndex++) {
 
-                if (inArray(pointIndex, closestPoints, currentNewNetSize)) continue; // Do not repeat points
+                if (seenPoints[pointIndex]) continue; // Do not repeat points
 
                 // Go through the entire segmentList and see if we can find a closer pairing
                 // If we can, update accordingly
@@ -1913,13 +1909,13 @@ void newReorderPins(routingInst* rst) {
 
             // Update newNet and closestPoints
             newNet[currentNewNetSize] = rst->nets[numNet].pins[closestPointIndex];
-            closestPoints[currentNewNetSize] = closestPointIndex;
+            seenPoints[closestPointIndex] = true;
             currentNewNetSize++;
         }
 
         // We are done - free old list and use the new list we created.
         free(rst->nets[numNet].pins);
-        free(closestPoints);
+        free(seenPoints);
         rst->nets[numNet].pins = newNet;
     }
 }
