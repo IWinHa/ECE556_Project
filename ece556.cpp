@@ -1929,9 +1929,9 @@ void newReorderPins(routingInst* rst) {
 
         reorderBetterL* helperReorderL = (reorderBetterL*) malloc(2 * sizeof(reorderBetterL));
         for (int i = 0; i < 2; i++) {
-            helperReorderL[i].listOfBetterDistance = (int*) malloc(rst->nets[numNet].numPins * sizeof(int));
-            helperReorderL[i].listOfBetterIndex = (int*) malloc(rst->nets[numNet].numPins * sizeof(int));
-            helperReorderL[i].listOfBetterPoint = (point*) malloc(rst->nets[numNet].numPins * sizeof(point));
+            helperReorderL[i].listOfBetterDistance = (int*) malloc(2 * rst->nets[numNet].numPins * sizeof(int));
+            helperReorderL[i].listOfBetterIndex = (int*) malloc(2 * rst->nets[numNet].numPins * sizeof(int));
+            helperReorderL[i].listOfBetterPoint = (point*) malloc(2 * rst->nets[numNet].numPins * sizeof(point));
         }
 
         reorderSegment firstSegment = eliminateL(bestSegmentList, rst->nets[numNet].numPins, rst->nets[numNet].pins, 
