@@ -28,6 +28,33 @@ typedef struct {
 
 } segment;
 
+typedef struct {
+    segment horizontalL1;
+    segment verticalL1;
+    segment horizontalL2;
+    segment verticalL2;
+
+    bool h1Valid;
+    bool v1Valid;
+    bool h2Valid;
+    bool v2Valid;
+} reorderSegment;
+
+typedef struct {
+    bool seen;
+    int bestLIndex;
+    point closestPointToL;
+    int closestPointToLDistance;
+} reorderBestSegment;
+
+typedef struct {
+    int numBetterIndices;
+    int* listOfBetterIndex;
+    point* listOfBetterPoint;
+    int* listOfBetterDistance;
+    long long totalDistanceSaved;
+} reorderBetterL;
+
 /**
  * A structure to represent a route
  */

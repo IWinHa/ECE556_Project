@@ -1,1 +1,4 @@
 **/*.o
+out_*
+check.txt
+time.txt
