@@ -1,0 +1,7 @@
+https://stackoverflow.com/questions/12406459/substring-in-c-using-pointer
+https://stackoverflow.com/questions/2001626/fgets-function-in-c
+https://stackoverflow.com/questions/4513316/split-string-in-c-every-white-space
+https://man7.org/linux/man-pages/man3/strtol.3.html
+https://stackoverflow.com/questions/67258978/how-to-create-a-char-substring-of-a-char-string-in-c
+https://valgrind.org/docs/manual/quick-start.html
+https://stackoverflow.com/questions/27594992/uninitialized-value-was-created-by-a-heap-allocation
