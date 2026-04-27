@@ -1,3 +1,10 @@
+1_00
+
+DONE!
+
+real	0m0.376s
+user	0m0.243s
+sys	0m0.032s
 Parsing benchmark....
 Reading solution...
 All nets connected!
@@ -5,6 +12,15 @@ total wirelength is 5176643
 total overflow is 1262989
 
 DONE!
+
+
+1_01
+
+DONE!
+
+real	5m7.183s
+user	5m6.512s
+sys	0m0.244s
 Parsing benchmark....
 Reading solution...
 All nets connected!
@@ -12,6 +28,15 @@ total wirelength is 4568649
 total overflow is 172600
 
 DONE!
+
+
+1_10
+
+DONE!
+
+real	0m0.437s
+user	0m0.314s
+sys	0m0.032s
 Parsing benchmark....
 Reading solution...
 All nets connected!
@@ -19,6 +44,15 @@ total wirelength is 3894095
 total overflow is 534418
 
 DONE!
+
+
+1_11
+
+DONE!
+
+real	5m30.384s
+user	5m29.756s
+sys	0m0.204s
 Parsing benchmark....
 Reading solution...
 All nets connected!
@@ -26,6 +60,15 @@ total wirelength is 4399594
 total overflow is 147089
 
 DONE!
+
+
+2_00
+
+DONE!
+
+real	0m0.439s
+user	0m0.273s
+sys	0m0.037s
 Parsing benchmark....
 Reading solution...
 All nets connected!
@@ -33,6 +76,15 @@ total wirelength is 4978847
 total overflow is 216881
 
 DONE!
+
+
+2_01
+
+DONE!
+
+real	5m12.721s
+user	5m12.204s
+sys	0m0.176s
 Parsing benchmark....
 Reading solution...
 All nets connected!
@@ -40,6 +92,15 @@ total wirelength is 3417482
 total overflow is 623
 
 DONE!
+
+
+2_10
+
+DONE!
+
+real	0m0.517s
+user	0m0.370s
+sys	0m0.044s
 Parsing benchmark....
 Reading solution...
 All nets connected!
@@ -47,6 +108,15 @@ total wirelength is 3715191
 total overflow is 79369
 
 DONE!
+
+
+2_11
+
+DONE!
+
+real	5m43.432s
+user	5m42.952s
+sys	0m0.148s
 Parsing benchmark....
 Reading solution...
 All nets connected!
@@ -54,6 +124,15 @@ total wirelength is 3278848
 total overflow is 770
 
 DONE!
+
+
+3_00
+
+DONE!
+
+real	0m0.846s
+user	0m0.588s
+sys	0m0.064s
 Parsing benchmark....
 Reading solution...
 All nets connected!
@@ -61,6 +140,15 @@ total wirelength is 14135345
 total overflow is 2161636
 
 DONE!
+
+
+3_01
+
+DONE!
+
+real	7m41.650s
+user	7m16.048s
+sys	0m24.590s
 Parsing benchmark....
 Reading solution...
 All nets connected!
@@ -68,6 +156,15 @@ total wirelength is 11386364
 total overflow is 95174
 
 DONE!
+
+
+3_10
+
+DONE!
+
+real	0m1.001s
+user	0m0.769s
+sys	0m0.044s
 Parsing benchmark....
 Reading solution...
 All nets connected!
@@ -75,6 +172,15 @@ total wirelength is 10425354
 total overflow is 796154
 
 DONE!
+
+
+3_11
+
+DONE!
+
+real	7m56.472s
+user	7m31.046s
+sys	0m24.460s
 Parsing benchmark....
 Reading solution...
 All nets connected!
@@ -82,3 +188,5 @@ total wirelength is 10672324
 total overflow is 85496
 
 DONE!
+
+
